@@ -1,165 +1,81 @@
-/* ==========================================================
-   HeartBeat Studio — storage.js
-   IndexedDB storage with localStorage fallback.
-   All data stays on-device. Zero server dependency.
-========================================================== */
+/* ================================================================
+   HeartBeat Studio — storage.js v3
+   IndexedDB primary, localStorage fallback.
+   All data is on-device. Zero server dependency.
+================================================================ */
+'use strict';
 
 const Storage = (() => {
-  const DB_NAME    = 'heartbeat_studio_db';
-  const DB_VERSION = 1;
-  const STORE_NAME = 'sessions';
-  const LS_KEY     = 'heartbeat_sessions_v2';
+  const DB_NAME = 'hbs_db_v3', DB_VER = 1, STORE = 'sessions', LS_KEY = 'hbs_v3';
+  let db = null, useIDB = false, _init = null;
 
-  let db = null;
-  let useIndexedDB = false;
-
-  /* ── INIT ── open or create the database ── */
-  async function init() {
-    return new Promise((resolve) => {
-      if (!window.indexedDB) {
-        console.warn('[Storage] IndexedDB unavailable, using localStorage');
-        resolve(false);
-        return;
-      }
-
-      const req = indexedDB.open(DB_NAME, DB_VERSION);
-
-      req.onupgradeneeded = (e) => {
-        const database = e.target.result;
-        if (!database.objectStoreNames.contains(STORE_NAME)) {
-          const store = database.createObjectStore(STORE_NAME, { keyPath: 'id' });
-          store.createIndex('date', 'date', { unique: false });
-        }
+  function init() {
+    if (_init) return _init;
+    _init = new Promise(res => {
+      if (!window.indexedDB) { res(false); return; }
+      const req = indexedDB.open(DB_NAME, DB_VER);
+      req.onupgradeneeded = e => {
+        const d = e.target.result;
+        if (!d.objectStoreNames.contains(STORE))
+          d.createObjectStore(STORE, { keyPath: 'id' });
       };
+      req.onsuccess  = e => { db = e.target.result; useIDB = true; res(true); };
+      req.onerror    = () => res(false);
+    });
+    return _init;
+  }
 
-      req.onsuccess = (e) => {
-        db = e.target.result;
-        useIndexedDB = true;
-        resolve(true);
-      };
-
-      req.onerror = () => {
-        console.warn('[Storage] IndexedDB error, falling back to localStorage');
-        resolve(false);
-      };
+  function _tx(mode, fn) {
+    return new Promise((res, rej) => {
+      const req = fn(db.transaction(STORE, mode).objectStore(STORE));
+      req.onsuccess = e => res(e.target.result);
+      req.onerror   = e => rej(e.target.error);
     });
   }
+  function _lsGet() { try { return JSON.parse(localStorage.getItem(LS_KEY) || '[]'); } catch { return []; } }
+  function _lsSet(a) { try { localStorage.setItem(LS_KEY, JSON.stringify(a)); } catch(e) { console.error(e); } }
 
-  /* ── SAVE SESSION ── */
-  async function saveSession(session) {
-    if (useIndexedDB && db) {
-      return new Promise((resolve, reject) => {
-        const tx    = db.transaction(STORE_NAME, 'readwrite');
-        const store = tx.objectStore(STORE_NAME);
-        const req   = store.put(session);
-        req.onsuccess = () => resolve(session);
-        req.onerror   = (e) => reject(e.target.error);
-      });
-    } else {
-      // localStorage fallback
-      const sessions = _lsLoad();
-      const idx      = sessions.findIndex(s => s.id === session.id);
-      if (idx >= 0) sessions[idx] = session;
-      else sessions.unshift(session);
-      _lsSave(sessions);
-      return session;
-    }
+  async function saveSession(s) {
+    await init();
+    if (useIDB) return _tx('readwrite', st => st.put(s));
+    const all = _lsGet(), i = all.findIndex(x => x.id === s.id);
+    i >= 0 ? all[i] = s : all.unshift(s);
+    _lsSet(all); return s;
   }
 
-  /* ── LOAD ALL SESSIONS ── newest first ── */
   async function loadSessions() {
-    if (useIndexedDB && db) {
-      return new Promise((resolve, reject) => {
-        const tx      = db.transaction(STORE_NAME, 'readonly');
-        const store   = tx.objectStore(STORE_NAME);
-        const req     = store.getAll();
-        req.onsuccess = (e) => {
-          const results = (e.target.result || [])
-            .sort((a, b) => b.id - a.id); // newest first
-          resolve(results);
-        };
-        req.onerror = (e) => reject(e.target.error);
-      });
-    } else {
-      return _lsLoad();
-    }
+    await init();
+    if (useIDB) return _tx('readonly', st => st.getAll()).then(a => (a||[]).sort((x,y) => y.id - x.id));
+    return _lsGet();
   }
 
-  /* ── DELETE SESSION ── */
   async function deleteSession(id) {
-    if (useIndexedDB && db) {
-      return new Promise((resolve, reject) => {
-        const tx    = db.transaction(STORE_NAME, 'readwrite');
-        const store = tx.objectStore(STORE_NAME);
-        const req   = store.delete(id);
-        req.onsuccess = () => resolve(true);
-        req.onerror   = (e) => reject(e.target.error);
-      });
-    } else {
-      const sessions = _lsLoad().filter(s => s.id !== id);
-      _lsSave(sessions);
-      return true;
-    }
+    await init();
+    if (useIDB) return _tx('readwrite', st => st.delete(id));
+    _lsSet(_lsGet().filter(s => s.id !== id));
   }
 
-  /* ── RENAME SESSION ── */
-  async function renameSession(id, newName) {
-    if (useIndexedDB && db) {
-      return new Promise((resolve, reject) => {
-        const tx    = db.transaction(STORE_NAME, 'readwrite');
-        const store = tx.objectStore(STORE_NAME);
-        const getReq = store.get(id);
-        getReq.onsuccess = (e) => {
-          const session = e.target.result;
-          if (!session) { reject(new Error('Session not found')); return; }
-          session.name = newName;
-          const putReq = store.put(session);
-          putReq.onsuccess = () => resolve(session);
-          putReq.onerror   = (e2) => reject(e2.target.error);
-        };
-        getReq.onerror = (e) => reject(e.target.error);
-      });
-    } else {
-      const sessions = _lsLoad();
-      const idx      = sessions.findIndex(s => s.id === id);
-      if (idx >= 0) {
-        sessions[idx].name = newName;
-        _lsSave(sessions);
-        return sessions[idx];
-      }
-      throw new Error('Session not found');
+  async function renameSession(id, name) {
+    await init();
+    if (useIDB) {
+      const s = await _tx('readonly', st => st.get(id));
+      if (!s) throw new Error('Not found');
+      s.name = name; return _tx('readwrite', st => st.put(s));
     }
+    const all = _lsGet(), s = all.find(x => x.id === id);
+    if (!s) throw new Error('Not found');
+    s.name = name; _lsSet(all); return s;
   }
 
-  /* ── Private: localStorage helpers ── */
-  function _lsLoad() {
-    try {
-      return JSON.parse(localStorage.getItem(LS_KEY) || '[]');
-    } catch { return []; }
-  }
-  function _lsSave(sessions) {
-    try {
-      localStorage.setItem(LS_KEY, JSON.stringify(sessions));
-    } catch (e) {
-      console.error('[Storage] localStorage write failed:', e);
-    }
-  }
-
-  /* ── BUILD SESSION OBJECT ── */
   function buildSession({ bpm, hrv, minBpm, maxBpm, mood, tempo, name }) {
-    const now  = new Date();
-    const id   = now.getTime();
-    const date = now.toISOString().split('T')[0];
+    const now = new Date(), id = now.getTime();
+    const date = now.toLocaleDateString('en-CA');
     const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const finalName = (name || '').trim() ||
-      `Session · ${now.toLocaleDateString([], { month:'short', day:'numeric' })} ${time}`;
-
-    return { id, name: finalName, bpm, hrv, minBpm, maxBpm, mood, tempo, date, time };
+    const label = (name||'').trim() || `Session · ${now.toLocaleDateString('en-US',{month:'short',day:'numeric'})} ${time}`;
+    return { id, name: label, bpm, hrv, minBpm, maxBpm, mood, tempo, date, time };
   }
 
   return { init, saveSession, loadSessions, deleteSession, renameSession, buildSession };
 })();
 
-/* Export for module environments, or attach to window */
-if (typeof module !== 'undefined') module.exports = Storage;
-else window.Storage = Storage;
+window.Storage = Storage;

@@ -1,240 +1,179 @@
-/* ==========================================================
-   HeartBeat Studio — audioEngine.js
-   Web Audio API music engine.
-   Generates heartbeat-driven music for minimum 60 seconds.
-   Designed for iOS Safari compatibility.
-========================================================== */
+/* ================================================================
+   HeartBeat Studio — audioEngine.js v3
+   Lookahead Web Audio scheduler. iOS Safari safe.
+   Generates BPM/HRV-adaptive music for ≥60 seconds.
+================================================================ */
+'use strict';
 
 const AudioEngine = (() => {
-
-  /* ── Musical scales mapped to mood ── */
+  /* ── Scales by mood ── */
   const SCALES = {
-    calm:   [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25], // C major
-    normal: [293.66, 329.63, 369.99, 392.00, 440.00, 493.88, 523.25, 587.33], // D major
-    stress: [220.00, 246.94, 261.63, 293.66, 329.63, 369.99, 415.30, 440.00], // A minor
+    calm:   [261.63,293.66,329.63,349.23,392.00,440.00,493.88,523.25],
+    normal: [293.66,329.63,369.99,392.00,440.00,493.88,523.25,587.33],
+    stress: [220.00,246.94,261.63,293.66,329.63,369.99,415.30,440.00],
   };
+  const MOOD_LABEL = { calm:'Ambient · Calm', normal:'Melodic · Balanced', stress:'Rhythmic · Intense' };
+  const KEYS   = ['C','D','E♭','F','G','A','B♭'];
+  const STYLES = ['Serenade','Nocturne','Elegy','Reverie','Sonata','Prelude','Étude'];
 
-  const MUSIC_KEYS   = ['C', 'D', 'E♭', 'F', 'G', 'A', 'B♭'];
-  const MUSIC_STYLES = ['Serenade', 'Nocturne', 'Elegy', 'Reverie', 'Sonata', 'Prelude', 'Étude'];
+  /* ── State ── */
+  let _ctx, master, echoDelay, echoFB, echoWet, lfoOsc, lfoGain;
+  let ticker = null, isPlaying = false;
+  let nextBeat = 0, beatIdx = 0, totalBeats = 72, duration = 60, _stopCb = null;
 
-  let audioCtx      = null;
-  let masterGain    = null;
-  let delayNode     = null;
-  let feedbackGain  = null;
-  let wetGain       = null;
-  let lfoOsc        = null;
-  let lfoGain       = null;
-  let schedulerTimer = null;
-  let isPlaying     = false;
-  let nextBeatTime  = 0;
-  let globalBeat    = 0;
-  let currentBPM    = 72;
-  let currentHRV    = 45;
-  let totalBeats    = 72;    // beats for >= 60s
-  let musicDuration = 60;
-  let onStopCallback = null;
-
-  /* ── Get or create AudioContext (iOS-safe) ── */
   function _getCtx() {
-    if (!audioCtx || audioCtx.state === 'closed') {
-      const Ctor = window.AudioContext || window.webkitAudioContext;
-      if (!Ctor) throw new Error('Web Audio API not supported');
-      audioCtx = new Ctor();
+    if (!_ctx || _ctx.state === 'closed') {
+      const C = window.AudioContext || window.webkitAudioContext;
+      if (!C) throw new Error('Web Audio not supported');
+      _ctx = new C();
     }
-    return audioCtx;
+    return _ctx;
   }
 
-  /* ── Resume AudioContext (required after user gesture on iOS) ── */
   async function resume() {
-    const ctx = _getCtx();
-    if (ctx.state === 'suspended') await ctx.resume();
-    return ctx;
+    const c = _getCtx();
+    if (c.state === 'suspended') await c.resume();
+    return c;
   }
 
-  /* ── Schedule a single beat ── */
-  function _scheduleBeat(ctx, scale, beatIdx, when, beatInterval, noteRange) {
-    // Bass — root note, every beat
-    const bassOsc  = ctx.createOscillator();
-    const bassGain = ctx.createGain();
-    bassOsc.type = 'sine';
-    bassOsc.frequency.setValueAtTime(scale[0] / 2, when);
-    bassGain.gain.setValueAtTime(0, when);
-    bassGain.gain.linearRampToValueAtTime(0.45, when + 0.012);
-    bassGain.gain.exponentialRampToValueAtTime(0.001, when + beatInterval * 0.88);
-    bassOsc.connect(bassGain);
-    bassGain.connect(masterGain);
-    bassOsc.start(when);
-    bassOsc.stop(when + beatInterval);
+  /* ── Schedule one beat at `when` ── */
+  function _scheduleBeat(c, scale, noteRange, when, iv) {
+    /* Bass — root, every beat */
+    const bO = c.createOscillator(), bG = c.createGain();
+    bO.type = 'sine'; bO.frequency.setValueAtTime(scale[0]/2, when);
+    bG.gain.setValueAtTime(0, when);
+    bG.gain.linearRampToValueAtTime(0.40, when + 0.012);
+    bG.gain.exponentialRampToValueAtTime(0.001, when + iv*0.85);
+    bO.connect(bG); bG.connect(master); bO.start(when); bO.stop(when+iv);
 
-    // Melody — HRV-driven note selection
-    const noteIdx    = Math.abs((beatIdx * 2 + Math.round(Math.sin(beatIdx * 0.7) * (noteRange - 1)))) % scale.length;
-    const freq       = scale[noteIdx];
-    const melOsc     = ctx.createOscillator();
-    const melGain    = ctx.createGain();
-    melOsc.type = beatIdx % 4 === 0 ? 'triangle' : 'sine';
-    melOsc.frequency.setValueAtTime(freq, when);
-    melGain.gain.setValueAtTime(0, when);
-    melGain.gain.linearRampToValueAtTime(0.30, when + 0.05);
-    melGain.gain.exponentialRampToValueAtTime(0.001, when + beatInterval * 0.75);
-    if (lfoGain) lfoGain.connect(melGain.gain);
-    melOsc.connect(melGain);
-    melGain.connect(masterGain);
-    if (delayNode) melGain.connect(delayNode);
-    melOsc.start(when);
-    melOsc.stop(when + beatInterval);
+    /* Melody — HRV-shaped note selection */
+    const ni   = Math.abs((beatIdx*2 + Math.round(Math.sin(beatIdx*0.73)*(noteRange-1)))) % scale.length;
+    const freq = scale[ni];
+    const mO   = c.createOscillator(), mG = c.createGain();
+    mO.type = beatIdx%4===0 ? 'triangle' : 'sine';
+    mO.frequency.setValueAtTime(freq, when);
+    mG.gain.setValueAtTime(0, when);
+    mG.gain.linearRampToValueAtTime(0.27, when + 0.05);
+    mG.gain.exponentialRampToValueAtTime(0.001, when + iv*0.72);
+    if (lfoGain) lfoGain.connect(mG.gain);
+    mO.connect(mG); mG.connect(master);
+    if (echoDelay) mG.connect(echoDelay);
+    mO.start(when); mO.stop(when+iv);
 
-    // Harmony — perfect 5th every 2 beats
-    if (beatIdx % 2 === 0) {
-      const harmOsc  = ctx.createOscillator();
-      const harmGain = ctx.createGain();
-      harmOsc.type = 'sine';
-      harmOsc.frequency.setValueAtTime(freq * 1.498, when);
-      harmGain.gain.setValueAtTime(0, when);
-      harmGain.gain.linearRampToValueAtTime(0.09, when + 0.08);
-      harmGain.gain.exponentialRampToValueAtTime(0.001, when + beatInterval * 0.6);
-      harmOsc.connect(harmGain);
-      harmGain.connect(masterGain);
-      harmOsc.start(when);
-      harmOsc.stop(when + beatInterval);
+    /* Harmony — 5th every 2 beats */
+    if (beatIdx%2===0) {
+      const hO = c.createOscillator(), hG = c.createGain();
+      hO.type = 'sine'; hO.frequency.setValueAtTime(freq*1.498, when);
+      hG.gain.setValueAtTime(0, when);
+      hG.gain.linearRampToValueAtTime(0.08, when + 0.08);
+      hG.gain.exponentialRampToValueAtTime(0.001, when + iv*0.56);
+      hO.connect(hG); hG.connect(master); hO.start(when); hO.stop(when+iv);
     }
 
-    // Soft percussion click
+    /* Soft noise click */
     try {
-      const bufLen   = Math.ceil(ctx.sampleRate * 0.04);
-      const clickBuf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
-      const cd       = clickBuf.getChannelData(0);
-      for (let i = 0; i < cd.length; i++) {
-        cd[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.004));
-      }
-      const click     = ctx.createBufferSource();
-      const clickGain = ctx.createGain();
-      click.buffer = clickBuf;
-      clickGain.gain.setValueAtTime(beatIdx % 4 === 0 ? 0.07 : 0.025, when);
-      click.connect(clickGain);
-      clickGain.connect(masterGain);
-      click.start(when);
-    } catch(e) { /* skip click on failure */ }
+      const len = Math.ceil(c.sampleRate*0.036);
+      const buf = c.createBuffer(1,len,c.sampleRate);
+      const ch  = buf.getChannelData(0);
+      for (let i=0;i<len;i++) ch[i] = (Math.random()*2-1)*Math.exp(-i/(c.sampleRate*0.004));
+      const src = c.createBufferSource(), cG = c.createGain();
+      src.buffer = buf; cG.gain.setValueAtTime(beatIdx%4===0?0.06:0.018, when);
+      src.connect(cG); cG.connect(master); src.start(when);
+    } catch {}
   }
 
   /* ── Lookahead scheduler ── */
-  function _runScheduler(ctx, scale, beatInterval, noteRange) {
-    const LOOKAHEAD = 0.25; // seconds ahead to schedule
-    while (nextBeatTime < ctx.currentTime + LOOKAHEAD) {
-      const beatIdx = globalBeat % totalBeats;
-      _scheduleBeat(ctx, scale, beatIdx, nextBeatTime, beatInterval, noteRange);
-      nextBeatTime += beatInterval;
-      globalBeat++;
+  function _run(c, scale, noteRange, iv) {
+    while (nextBeat < c.currentTime + 0.26) {
+      _scheduleBeat(c, scale, noteRange, nextBeat, iv);
+      nextBeat += iv;
+      beatIdx = (beatIdx + 1) % totalBeats;
     }
-    schedulerTimer = setTimeout(() => _runScheduler(ctx, scale, beatInterval, noteRange), 100);
+    ticker = setTimeout(() => _run(c, scale, noteRange, iv), 90);
   }
 
-  /* ── START MUSIC ── */
+  /* ── Public: start ── */
   async function start(bpm, hrv, onStop) {
-    stop(); // clean up any existing
+    stop();
+    let c;
+    try { c = await resume(); }
+    catch(e) { console.error('[AudioEngine]', e); return false; }
 
-    let ctx;
-    try {
-      ctx = await resume();
-    } catch(e) {
-      console.error('[AudioEngine] AudioContext failed:', e);
-      return false;
-    }
+    const B  = Math.max(40, Math.min(200, bpm||72));
+    const iv = 60/B;
+    const mood      = _mood(B, hrv||45);
+    const scale     = SCALES[mood];
+    const noteRange = Math.max(3, Math.min(8, Math.round((hrv||45)/10)));
 
-    currentBPM    = Math.max(40, Math.min(200, bpm));
-    currentHRV    = hrv || 45;
-    onStopCallback = onStop || null;
+    totalBeats = Math.ceil(60/iv);
+    duration   = Math.ceil(totalBeats * iv);
+    _stopCb    = onStop || null;
 
-    const beatInterval = 60 / currentBPM;
-    const mood         = _getMood(currentBPM, currentHRV);
-    const scale        = SCALES[mood];
-    const noteRange    = Math.max(3, Math.min(8, Math.round(currentHRV / 10)));
+    /* Master gain — fade in */
+    master = c.createGain();
+    master.gain.setValueAtTime(0, c.currentTime);
+    master.gain.linearRampToValueAtTime(0.17, c.currentTime + 0.55);
+    master.connect(c.destination);
 
-    // Minimum 60 seconds
-    totalBeats    = Math.ceil(60 / beatInterval);
-    musicDuration = Math.ceil(totalBeats * beatInterval);
+    /* Echo / delay */
+    echoDelay = c.createDelay(1.2); echoFB = c.createGain(); echoWet = c.createGain();
+    echoDelay.delayTime.setValueAtTime(iv*0.5, c.currentTime);
+    echoFB.gain.setValueAtTime(0.18, c.currentTime);
+    echoWet.gain.setValueAtTime(0.11, c.currentTime);
+    echoDelay.connect(echoFB); echoFB.connect(echoDelay);
+    echoDelay.connect(echoWet); echoWet.connect(master);
 
-    // Master gain with fade-in
-    masterGain = ctx.createGain();
-    masterGain.gain.setValueAtTime(0, ctx.currentTime);
-    masterGain.gain.linearRampToValueAtTime(0.18, ctx.currentTime + 0.4);
-    masterGain.connect(ctx.destination);
+    /* LFO tremolo (breathing quality) */
+    lfoOsc = c.createOscillator(); lfoGain = c.createGain();
+    lfoOsc.frequency.setValueAtTime(B/120, c.currentTime);
+    lfoGain.gain.setValueAtTime(0.022, c.currentTime);
+    lfoOsc.connect(lfoGain); lfoOsc.start();
 
-    // Echo / delay
-    delayNode    = ctx.createDelay(1.0);
-    feedbackGain = ctx.createGain();
-    wetGain      = ctx.createGain();
-    delayNode.delayTime.setValueAtTime(beatInterval * 0.5, ctx.currentTime);
-    feedbackGain.gain.setValueAtTime(0.20, ctx.currentTime);
-    wetGain.gain.setValueAtTime(0.12, ctx.currentTime);
-    delayNode.connect(feedbackGain);
-    feedbackGain.connect(delayNode);
-    delayNode.connect(wetGain);
-    wetGain.connect(masterGain);
-
-    // LFO tremolo (breathing feel)
-    lfoOsc  = ctx.createOscillator();
-    lfoGain = ctx.createGain();
-    lfoOsc.frequency.setValueAtTime(currentBPM / 120, ctx.currentTime);
-    lfoGain.gain.setValueAtTime(0.025, ctx.currentTime);
-    lfoOsc.connect(lfoGain);
-    lfoOsc.start();
-
-    globalBeat   = 0;
-    nextBeatTime = ctx.currentTime + 0.1;
-    isPlaying    = true;
-
-    _runScheduler(ctx, scale, beatInterval, noteRange);
+    beatIdx = 0; nextBeat = c.currentTime + 0.1;
+    isPlaying = true;
+    _run(c, scale, noteRange, iv);
     return true;
   }
 
-  /* ── STOP MUSIC ── */
+  /* ── Public: stop (immediate) ── */
   function stop() {
-    if (schedulerTimer) { clearTimeout(schedulerTimer); schedulerTimer = null; }
-
-    const nodes = [masterGain, delayNode, feedbackGain, wetGain, lfoOsc, lfoGain];
-    nodes.forEach(n => {
+    if (ticker) { clearTimeout(ticker); ticker = null; }
+    [master, echoDelay, echoFB, echoWet, lfoOsc, lfoGain].forEach(n => {
       if (!n) return;
-      try { n.stop && n.stop(); } catch(e) {}
-      try { n.disconnect(); } catch(e) {}
+      try { n.stop && n.stop(); } catch {}
+      try { n.disconnect(); } catch {}
     });
-
-    masterGain = delayNode = feedbackGain = wetGain = lfoOsc = lfoGain = null;
-    isPlaying  = false;
-
-    if (onStopCallback) { onStopCallback(); onStopCallback = null; }
+    master = echoDelay = echoFB = echoWet = lfoOsc = lfoGain = null;
+    isPlaying = false;
+    if (_stopCb) { _stopCb(); _stopCb = null; }
   }
 
-  /* ── FADE OUT then STOP ── */
-  function fadeOut(duration = 0.6) {
-    if (!masterGain || !audioCtx) { stop(); return; }
-    const ctx = audioCtx;
-    masterGain.gain.setValueAtTime(masterGain.gain.value, ctx.currentTime);
-    masterGain.gain.linearRampToValueAtTime(0, ctx.currentTime + duration);
-    setTimeout(stop, (duration + 0.1) * 1000);
+  /* ── Public: fade out ── */
+  function fadeOut(sec=0.7) {
+    if (!master || !_ctx) { stop(); return; }
+    master.gain.setValueAtTime(master.gain.value, _ctx.currentTime);
+    master.gain.linearRampToValueAtTime(0.001, _ctx.currentTime + sec);
+    setTimeout(stop, (sec+0.15)*1000);
   }
 
-  /* ── GET metadata for display ── */
-  function getMusicMeta(bpm, hrv) {
-    const key   = MUSIC_KEYS[bpm % MUSIC_KEYS.length];
-    const style = MUSIC_STYLES[Math.floor(bpm / 10) % MUSIC_STYLES.length];
-    const mood  = _getMood(bpm, hrv);
-    const moodLabels = { calm:'Ambient · Calm', normal:'Melodic · Balanced', stress:'Rhythmic · Intense' };
-    return { title: `Pulse ${style} in ${key}`, subtitle: `${bpm} BPM · ${moodLabels[mood]}`, mood };
+  function getMeta(bpm, hrv) {
+    const key   = KEYS[bpm % KEYS.length];
+    const style = STYLES[Math.floor(bpm/10) % STYLES.length];
+    const mood  = _mood(bpm, hrv);
+    return { title:`Pulse ${style} in ${key}`, subtitle:`${bpm} BPM · ${MOOD_LABEL[mood]}`, mood };
   }
 
-  function getDuration() { return musicDuration; }
+  function getDuration()  { return duration; }
   function getIsPlaying() { return isPlaying; }
 
-  /* ── Private helpers ── */
-  function _getMood(bpm, hrv) {
+  function _mood(bpm, hrv) {
     if (bpm < 65 || hrv > 55) return 'calm';
     if (bpm > 100 || hrv < 20) return 'stress';
     if (bpm >= 65 && bpm <= 85) return 'calm';
     return 'normal';
   }
 
-  return { start, stop, fadeOut, resume, getMusicMeta, getDuration, getIsPlaying };
+  return { start, stop, fadeOut, resume, getMeta, getDuration, getIsPlaying };
 })();
 
-if (typeof module !== 'undefined') module.exports = AudioEngine;
-else window.AudioEngine = AudioEngine;
+window.AudioEngine = AudioEngine;

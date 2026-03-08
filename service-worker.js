@@ -1,63 +1,40 @@
-/* ==========================================================
-   HeartBeat Studio — Service Worker
-   Provides offline support via cache-first strategy.
-========================================================== */
+/* ================================================================
+   HeartBeat Studio — Service Worker v3
+   Cache-first with network fallback. Full offline support.
+================================================================ */
+'use strict';
 
-const CACHE_NAME    = 'heartbeat-studio-v1';
-const CACHE_ASSETS  = [
-  './',
-  './index.html',
-  './styles.css',
-  './app.js',
-  './storage.js',
-  './audioEngine.js',
-  './manifest.json'
+const CACHE = 'hbs-v3-1.0.0';
+const ASSETS = [
+  './', './index.html', './styles.css', './app.js',
+  './storage.js', './audioEngine.js', './manifest.json',
+  './icons/icon-192.png', './icons/icon-512.png'
 ];
 
-/* Install — pre-cache all static assets */
-self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(CACHE_ASSETS))
-      .then(() => self.skipWaiting())
+self.addEventListener('install', e => {
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });
 
-/* Activate — clear old caches */
-self.addEventListener('activate', event => {
-  event.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(
-        keys
-          .filter(k => k !== CACHE_NAME)
-          .map(k => caches.delete(k))
-      )
-    ).then(() => self.clients.claim())
-  );
-});
-
-/* Fetch — cache-first, fall back to network */
-self.addEventListener('fetch', event => {
-  // Only handle GET requests for same-origin assets
-  if (event.request.method !== 'GET') return;
-  if (!event.request.url.startsWith(self.location.origin)) return;
-
-  event.respondWith(
-    caches.match(event.request).then(cached => {
-      if (cached) return cached;
-      return fetch(event.request).then(response => {
-        // Cache valid responses
-        if (response && response.status === 200 && response.type === 'basic') {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+self.addEventListener('fetch', e => {
+  if (e.request.method !== 'GET') return;
+  if (!e.request.url.startsWith(self.location.origin)) return;
+  e.respondWith(
+    caches.match(e.request).then(cached => {
+      const net = fetch(e.request).then(r => {
+        if (r && r.status === 200 && r.type === 'basic') {
+          caches.open(CACHE).then(c => c.put(e.request, r.clone()));
         }
-        return response;
-      }).catch(() => {
-        // Offline fallback for navigation requests
-        if (event.request.mode === 'navigate') {
-          return caches.match('./index.html');
-        }
-      });
+        return r;
+      }).catch(() => null);
+      return cached || net || caches.match('./index.html');
     })
   );
 });

@@ -1,667 +1,601 @@
-/* ==========================================================
-   HeartBeat Studio — app.js
-   Main application controller.
-   Handles UI state machine, PPG analysis, camera, navigation.
-========================================================== */
-
+/* ================================================================
+   HeartBeat Studio — app.js v3
+   State machine, PPG analysis, camera, UI, library, navigation.
+================================================================ */
 'use strict';
 
-/* ──────────────────────────────────────────
-   APP STATE
-────────────────────────────────────────── */
-const App = {
+/* ──────────────────────────────────────
+   STATE
+────────────────────────────────────── */
+const S = {
   /* Camera / scan */
-  stream:         null,
-  track:          null,
-  animFrameId:    null,
-  scanInterval:   null,
-  scanElapsed:    0,
-  SCAN_DURATION:  30,
+  stream:        null,
+  track:         null,
+  rafId:         null,
+  scanTimer:     null,
+  elapsed:       0,
+  SCAN_SEC:      30,
 
-  /* PPG signal */
-  ppgBuffer:      [],
-  ppgTimestamps:  [],
-  bpmHistory:     [],
-  peakTimes:      [],
-  smoothedValue:  0,
-  emaAlpha:       0.08,
-  signalQuality:  0,
+  /* PPG buffers */
+  ppgBuf:        [],
+  ppgTs:         [],
+  bpmHist:       [],
+  peakTs:        [],
+  ema:           0,
+  EMA_A:         0.08,
+  quality:       0,
+  frameN:        0,
 
   /* Results */
-  finalBPM:       72,
-  finalHRV:       45,
-  finalMin:       68,
-  finalMax:       78,
-  finalMood:      'calm',
+  bpm: 72, hrv: 45, minBpm: 68, maxBpm: 78, mood: 'calm',
+  musicBpm: 72,
 
-  /* Music */
-  musicBPM:       72,
-  playbackTimer:  null,
-  libraryPlayingId: null,
+  /* Playback */
+  pbTimer:         null,
+  pbElapsed:       0,
+  resultWavRaf:    null,
+  libPlayingId:    null,
 
-  /* Current screen */
-  currentScreen:  'home',
-
-  /* Waveform animation id */
-  resultWavAnimId: null,
+  /* UI */
+  screen: 'home',
 };
 
-/* ──────────────────────────────────────────
-   SCREEN IDs & NAV
-────────────────────────────────────────── */
+/* ──────────────────────────────────────
+   NAVIGATION
+────────────────────────────────────── */
 const SCREENS = {
-  home:      'screenHome',
-  scan:      'screenScan',
-  results:   'screenResults',
-  library:   'screenLibrary',
-  error:     'screenError',
-};
-
-const NAV_MAP = {
-  screenHome:    'navHome',
-  screenResults: 'navHome',
-  screenLibrary: 'navLibrary',
+  home: 'scrHome', scan: 'scrScan',
+  results: 'scrResults', library: 'scrLibrary', error: 'scrError',
 };
 
 function showScreen(name) {
-  const screenId = SCREENS[name] || name;
-  document.querySelectorAll('.screen').forEach(s => {
-    s.classList.toggle('active', s.id === screenId);
-    s.setAttribute('aria-hidden', s.id !== screenId ? 'true' : 'false');
+  const id = SCREENS[name] || name;
+  document.querySelectorAll('.screen').forEach(el => {
+    const active = el.id === id;
+    el.classList.toggle('active', active);
+    el.setAttribute('aria-hidden', active ? 'false' : 'true');
+    if (active) el.scrollTop = 0;
   });
-  App.currentScreen = name;
+  S.screen = name;
 
-  // Nav bar visibility
-  const hideNav = ['scan', 'error'];
-  const navBar  = document.getElementById('navBar');
-  navBar.hidden = hideNav.includes(name);
+  const nav = document.getElementById('mainNav');
+  nav.hidden = ['scan', 'error'].includes(name);
 
-  // Update active nav tab
-  document.querySelectorAll('.nav-tab').forEach(t => {
-    const target = t.dataset.screen;
-    t.classList.toggle('active', target === screenId);
-    t.setAttribute('aria-current', target === screenId ? 'page' : 'false');
+  document.querySelectorAll('.nav__tab').forEach(t => {
+    const match = t.dataset.screen === id;
+    t.classList.toggle('active', match);
+    t.setAttribute('aria-current', match ? 'page' : 'false');
   });
 
-  // Scroll to top
-  const screen = document.getElementById(screenId);
-  if (screen) screen.scrollTop = 0;
-
-  // Screen-specific on-show logic
   if (name === 'library') renderLibrary();
 }
 
-/* ──────────────────────────────────────────
-   TOAST NOTIFICATION
-────────────────────────────────────────── */
-function showToast(msg, type = 'info', duration = 2800) {
+/* ──────────────────────────────────────
+   TOAST
+────────────────────────────────────── */
+function toast(msg, type = '', dur = 2800) {
   const el = document.getElementById('toast');
   el.textContent = msg;
-  el.className   = `toast show toast--${type}`;
+  el.className   = `toast show ${type}`;
   el.setAttribute('role', 'status');
   clearTimeout(el._t);
   el._t = setTimeout(() => {
     el.classList.remove('show');
-    el.removeAttribute('role');
-  }, duration);
+    el.className = 'toast';
+  }, dur);
 }
 
-/* ──────────────────────────────────────────
-   FEEDBACK STRIP (scan screen)
-────────────────────────────────────────── */
-const FEEDBACK = {
-  init:   { icon: '👆', cls: '',      text: 'Cover the rear camera lens with your fingertip and hold still.' },
-  weak:   { icon: '⚠️', cls: 'warn',  text: 'Signal weak — try pressing your fingertip firmly over the lens.' },
-  ok:     { icon: '✅', cls: 'good',  text: 'Good signal! Keep your finger steady on the camera.' },
-  strong: { icon: '💚', cls: 'good',  text: 'Excellent signal — detecting your heartbeat clearly.' },
-  noisy:  { icon: '🔄', cls: 'warn',  text: 'Movement detected — hold your hand completely still.' },
+/* ──────────────────────────────────────
+   FEEDBACK STRIP
+────────────────────────────────────── */
+const FBSTATES = {
+  init:   { icon:'👆', cls:'',     msg:'Cover the rear camera lens with your fingertip and hold still.' },
+  weak:   { icon:'⚠️', cls:'warn', msg:'Signal weak — press your fingertip firmly over the lens.' },
+  ok:     { icon:'✅', cls:'good', msg:'Good signal! Keep your finger steady on the camera.' },
+  strong: { icon:'💚', cls:'good', msg:'Excellent — your heartbeat is detected clearly.' },
+  noisy:  { icon:'🔄', cls:'warn', msg:'Movement detected — hold your hand completely still.' },
 };
 
 function setFeedback(key) {
-  const f = FEEDBACK[key] || FEEDBACK.init;
-  const strip = document.getElementById('feedbackStrip');
-  strip.className = `feedback-strip ${f.cls}`;
-  document.getElementById('feedbackIcon').textContent = f.icon;
-  document.getElementById('feedbackText').textContent = f.text;
-  strip.setAttribute('aria-label', f.text);
+  const f = FBSTATES[key] || FBSTATES.init;
+  const el = document.getElementById('signalStrip');
+  el.className = `signal-strip ${f.cls}`;
+  el.setAttribute('aria-label', f.msg);
+  document.getElementById('stripIcon').textContent = f.icon;
+  document.getElementById('stripText').textContent = f.msg;
 }
 
-/* ──────────────────────────────────────────
-   SIGNAL STRENGTH INDICATOR
-────────────────────────────────────────── */
-function updateSignal(quality) {
-  App.signalQuality = quality;
-  const labels = ['No signal', 'Very weak', 'Weak', 'Fair', 'Good', 'Strong'];
+/* ──────────────────────────────────────
+   SIGNAL BARS
+────────────────────────────────────── */
+function setSignal(q) {
+  S.quality = q;
+  const labels = ['—', 'Very Weak', 'Weak', 'Fair', 'Good', 'Strong'];
   for (let i = 1; i <= 5; i++) {
-    const bar = document.getElementById(`sb${i}`);
-    if (bar) bar.classList.toggle('lit', i <= quality);
+    document.getElementById(`sb${i}`)?.classList.toggle('lit', i <= q);
   }
-  const valEl = document.getElementById('signalValue');
-  if (valEl) valEl.textContent = labels[quality] || '—';
-  // Live region for screen readers
-  const liveEl = document.getElementById('signalLive');
-  if (liveEl && quality > 0) liveEl.textContent = `Signal: ${labels[quality]}`;
+  const sigEl = document.getElementById('sigTxt');
+  if (sigEl) sigEl.textContent = labels[q] || '—';
+  const liveEl = document.getElementById('sigLive');
+  if (liveEl && q > 0) liveEl.textContent = `Signal: ${labels[q]}`;
 }
 
-/* ──────────────────────────────────────────
+/* ──────────────────────────────────────
    BPM DISPLAY
-────────────────────────────────────────── */
-function updateBPMDisplay(bpm) {
-  const el     = document.getElementById('liveBpm');
-  const status = document.getElementById('bpmStatus');
-  if (el) el.textContent = bpm;
+────────────────────────────────────── */
+function setBPM(bpm) {
+  const numEl  = document.getElementById('liveBpm');
+  const pillEl = document.getElementById('bpmPill');
+  if (numEl) numEl.textContent = bpm;
 
-  let cls = 'bpm-status', label = 'Normal';
+  let cls = 'bpm-pill', label = 'Normal';
   if (bpm < 60)        { cls += ' low';      label = 'Low'; }
   else if (bpm <= 100) { cls += ' normal';   label = 'Normal'; }
   else                 { cls += ' elevated'; label = 'Elevated'; }
 
-  if (status) { status.textContent = label; status.className = cls; }
-
-  // Live region
-  const live = document.getElementById('bpmLive');
-  if (live) live.textContent = `Heart rate: ${bpm} beats per minute, ${label}`;
+  if (pillEl) { pillEl.textContent = label; pillEl.className = cls; }
+  const liveEl = document.getElementById('bpmLive');
+  if (liveEl) liveEl.textContent = `Heart rate: ${bpm} BPM — ${label}`;
 }
 
-/* ──────────────────────────────────────────
-   WAVEFORM CANVAS
-────────────────────────────────────────── */
-function drawWaveform(canvas, ctx, data) {
+/* ──────────────────────────────────────
+   WAVEFORM DRAW (scan screen)
+────────────────────────────────────── */
+function drawWave(canvas, ctx, data) {
   const dpr = window.devicePixelRatio || 1;
-  const W   = canvas.width;
-  const H   = canvas.height;
-
+  const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = 'transparent';
-  ctx.fillRect(0, 0, W, H);
-
   if (data.length < 2) return;
 
-  const N   = Math.min(data.length, Math.floor(W / 1.5));
+  const N   = Math.min(data.length, Math.floor(W / 1.4));
   const seg = data.slice(-N);
-  const min = Math.min(...seg);
-  const max = Math.max(...seg);
-  const rng = max - min || 1;
-  const pad = H * 0.12;
+  const lo  = Math.min(...seg), hi = Math.max(...seg);
+  const rng = hi - lo || 1;
+  const pad = H * 0.1;
+  const px  = i => (i / (seg.length - 1)) * W;
+  const py  = v => H - pad - ((v - lo) / rng) * (H - pad * 2);
 
-  const plotX = (i) => (i / (seg.length - 1)) * W;
-  const plotY = (v) => H - pad - ((v - min) / rng) * (H - pad * 2);
-
-  // Glow
+  /* Glow pass */
   ctx.beginPath();
-  ctx.strokeStyle = 'rgba(232,51,74,0.15)';
-  ctx.lineWidth   = 7 * dpr;
-  ctx.lineJoin    = 'round';
-  ctx.lineCap     = 'round';
-  for (let i = 0; i < seg.length; i++) {
-    i === 0 ? ctx.moveTo(plotX(i), plotY(seg[i])) : ctx.lineTo(plotX(i), plotY(seg[i]));
-  }
+  ctx.strokeStyle = 'rgba(232,51,74,0.18)';
+  ctx.lineWidth   = 8 * dpr;
+  ctx.lineJoin    = 'round'; ctx.lineCap = 'round';
+  seg.forEach((v, i) => i === 0 ? ctx.moveTo(px(i), py(v)) : ctx.lineTo(px(i), py(v)));
   ctx.stroke();
 
-  // Line
+  /* Main line */
   ctx.beginPath();
-  ctx.strokeStyle = '#e8334a';
+  ctx.strokeStyle = 'var(--vital, #e8334a)';
   ctx.lineWidth   = 2 * dpr;
-  for (let i = 0; i < seg.length; i++) {
-    i === 0 ? ctx.moveTo(plotX(i), plotY(seg[i])) : ctx.lineTo(plotX(i), plotY(seg[i]));
-  }
+  seg.forEach((v, i) => i === 0 ? ctx.moveTo(px(i), py(v)) : ctx.lineTo(px(i), py(v)));
   ctx.stroke();
 
-  // Leading dot
+  /* Leading dot */
   ctx.beginPath();
-  ctx.arc(W, plotY(seg[seg.length - 1]), 3 * dpr, 0, Math.PI * 2);
-  ctx.fillStyle = '#ffffff';
-  ctx.fill();
+  ctx.arc(W, py(seg[seg.length-1]), 3 * dpr, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff'; ctx.fill();
 }
 
-/* ──────────────────────────────────────────
+/* ──────────────────────────────────────
    RESULT WAVEFORM (animated bars)
-────────────────────────────────────────── */
-function startResultWaveform(bpm) {
-  if (App.resultWavAnimId) cancelAnimationFrame(App.resultWavAnimId);
-  const canvas = document.getElementById('resultWaveform');
+────────────────────────────────────── */
+function startResultWave(bpm) {
+  if (S.resultWavRaf) cancelAnimationFrame(S.resultWavRaf);
+  const canvas = document.getElementById('playerWave');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  canvas.width  = canvas.offsetWidth  * (window.devicePixelRatio || 1);
-  canvas.height = canvas.offsetHeight * (window.devicePixelRatio || 1);
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width  = canvas.offsetWidth  * dpr;
+  canvas.height = canvas.offsetHeight * dpr;
   const W = canvas.width, H = canvas.height;
-  const bars = 60;
-  const barW = W / bars;
+  const bars = 64, bw = W / bars;
   let phase = 0;
 
   function draw() {
     ctx.clearRect(0, 0, W, H);
     for (let i = 0; i < bars; i++) {
       const t      = (i / bars) * Math.PI * 2;
-      const shaped = Math.pow(Math.sin(t + phase) * 0.5 + 0.5, 0.35);
-      const h      = shaped * H * 0.85;
-      ctx.fillStyle = `rgba(232,51,74,${0.2 + shaped * 0.8})`;
-      ctx.fillRect(i * barW + 1, (H - h) / 2, barW - 2, h);
+      const shaped = Math.pow(Math.abs(Math.sin(t + phase)), 0.4);
+      const h      = shaped * H * 0.88;
+      const alpha  = 0.18 + shaped * 0.82;
+      ctx.fillStyle = `rgba(232,51,74,${alpha.toFixed(2)})`;
+      ctx.fillRect(i * bw + 1, (H - h) / 2, bw - 2, h);
     }
-    phase += (bpm / 60) * 0.07;
-    App.resultWavAnimId = requestAnimationFrame(draw);
+    phase += (bpm / 60) * 0.065;
+    S.resultWavRaf = requestAnimationFrame(draw);
   }
   draw();
 }
 
-/* ──────────────────────────────────────────
-   PLAYBACK PROGRESS
-────────────────────────────────────────── */
-function startPlaybackTimer(totalSec) {
-  stopPlaybackTimer();
-  let elapsed = 0;
-  App.playbackTimer = setInterval(() => {
-    elapsed = (elapsed + 1) % totalSec;
-    const pct = (elapsed / totalSec) * 100;
-    const fillEl = document.getElementById('playbackFill');
-    const timeEl = document.getElementById('playbackElapsed');
-    if (fillEl) fillEl.style.width = `${pct}%`;
-    if (timeEl) timeEl.textContent = _fmtTime(elapsed);
+function stopResultWave() {
+  if (S.resultWavRaf) { cancelAnimationFrame(S.resultWavRaf); S.resultWavRaf = null; }
+}
+
+/* ──────────────────────────────────────
+   PLAYBACK TIMER
+────────────────────────────────────── */
+function startPBTimer(total) {
+  stopPBTimer();
+  S.pbElapsed = 0;
+  S.pbTimer = setInterval(() => {
+    S.pbElapsed = (S.pbElapsed + 1) % total;
+    const pct = (S.pbElapsed / total) * 100;
+    const fill = document.getElementById('pbFill');
+    const elapsed = document.getElementById('pbElapsed');
+    if (fill) fill.style.width = `${pct}%`;
+    if (elapsed) elapsed.textContent = fmtTime(S.pbElapsed);
   }, 1000);
 }
 
-function stopPlaybackTimer() {
-  if (App.playbackTimer) { clearInterval(App.playbackTimer); App.playbackTimer = null; }
-  const fillEl = document.getElementById('playbackFill');
-  const timeEl = document.getElementById('playbackElapsed');
-  if (fillEl) fillEl.style.width = '0%';
-  if (timeEl) timeEl.textContent = '0:00';
+function stopPBTimer() {
+  if (S.pbTimer) { clearInterval(S.pbTimer); S.pbTimer = null; }
+  const fill = document.getElementById('pbFill');
+  const elapsed = document.getElementById('pbElapsed');
+  if (fill) fill.style.width = '0%';
+  if (elapsed) elapsed.textContent = '0:00';
 }
 
-function _fmtTime(sec) {
-  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+function fmtTime(s) {
+  return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
 }
 
-/* ──────────────────────────────────────────
+/* ──────────────────────────────────────
    PPG HELPERS
-────────────────────────────────────────── */
-function _median(arr) {
+────────────────────────────────────── */
+function median(arr) {
   if (!arr.length) return 0;
-  const s = [...arr].sort((a, b) => a - b);
-  const m = Math.floor(s.length / 2);
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  const s = [...arr].sort((a, b) => a - b), m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m-1] + s[m]) / 2;
 }
 
-/* ──────────────────────────────────────────
+/* ──────────────────────────────────────
    START SCAN
-────────────────────────────────────────── */
+────────────────────────────────────── */
 async function startScan() {
   AudioEngine.stop();
-  stopPlaybackTimer();
-  _resetScanState();
+  stopPBTimer();
+  stopResultWave();
+  _resetScan();
 
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    _showError('unsupported');
-    return;
+  if (!navigator.mediaDevices?.getUserMedia) {
+    _showError('unsupported'); return;
   }
 
   try {
-    App.stream = await navigator.mediaDevices.getUserMedia({
+    S.stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: { ideal: 'environment' },
-        width:      { ideal: 320 },
-        height:     { ideal: 240 },
-        frameRate:  { ideal: 30, min: 15 },
+        width:  { ideal: 320 }, height: { ideal: 240 },
+        frameRate: { ideal: 30, min: 15 },
       },
       audio: false,
     });
 
-    const video = document.getElementById('cameraVideo');
-    video.srcObject = App.stream;
-    await video.play();
+    const vid = document.getElementById('camVid');
+    vid.srcObject = S.stream;
+    await vid.play();
 
-    // Try torch
-    App.track = App.stream.getVideoTracks()[0];
+    S.track = S.stream.getVideoTracks()[0];
     try {
-      const caps = App.track.getCapabilities?.();
-      if (caps?.torch) await App.track.applyConstraints({ advanced: [{ torch: true }] });
-    } catch { /* torch unavailable */ }
+      const caps = S.track.getCapabilities?.();
+      if (caps?.torch) await S.track.applyConstraints({ advanced: [{ torch: true }] });
+    } catch {}
 
     showScreen('scan');
-    _beginPPGAnalysis(video);
-    _beginScanTimer();
+    _beginPPG(vid);
+    _beginTimer();
 
   } catch(err) {
-    console.error('[App] Camera error:', err);
+    console.error('[Camera]', err);
     _stopCamera();
     _showError(err.name === 'NotAllowedError' ? 'denied' : 'unsupported');
   }
 }
 
 function _showError(type) {
-  const titleEl = document.getElementById('errorTitle');
-  const msgEl   = document.getElementById('errorMsg');
-  const msgs = {
-    denied: {
-      title: 'Camera Access Denied',
-      msg:   'HeartBeat Studio needs your camera to detect your pulse. Please allow camera access in your browser settings and try again.',
-    },
-    unsupported: {
-      title: 'Camera Not Available',
-      msg:   'Your browser or device does not support camera access. Try using Chrome or Safari on a mobile device.',
-    },
+  const MSGS = {
+    denied:      { title:'Camera Access Denied',   msg:'HeartBeat Studio needs camera access to detect your pulse. Please allow it in your browser settings, then try again.' },
+    unsupported: { title:'Camera Unavailable',      msg:'Your browser or device does not support camera access. Please try Chrome or Safari on a mobile device.' },
   };
-  const data = msgs[type] || msgs.unsupported;
-  if (titleEl) titleEl.textContent = data.title;
-  if (msgEl)   msgEl.textContent   = data.msg;
+  const d = MSGS[type] || MSGS.unsupported;
+  const t = document.getElementById('errTitle');
+  const m = document.getElementById('errMsg');
+  if (t) t.textContent = d.title;
+  if (m) m.textContent = d.msg;
   showScreen('error');
 }
 
-/* ──────────────────────────────────────────
+/* ──────────────────────────────────────
    RESET SCAN STATE
-────────────────────────────────────────── */
-function _resetScanState() {
-  App.ppgBuffer     = [];
-  App.ppgTimestamps = [];
-  App.bpmHistory    = [];
-  App.peakTimes     = [];
-  App.smoothedValue = 0;
-  App.signalQuality = 0;
-  App.scanElapsed   = 0;
+────────────────────────────────────── */
+function _resetScan() {
+  S.ppgBuf=[]; S.ppgTs=[]; S.bpmHist=[]; S.peakTs=[];
+  S.ema=0; S.quality=0; S.elapsed=0; S.frameN=0;
 
-  if (App.animFrameId)  { cancelAnimationFrame(App.animFrameId); App.animFrameId = null; }
-  if (App.scanInterval) { clearInterval(App.scanInterval); App.scanInterval = null; }
+  if (S.rafId)    { cancelAnimationFrame(S.rafId); S.rafId = null; }
+  if (S.scanTimer){ clearInterval(S.scanTimer); S.scanTimer = null; }
 
-  const liveBpm = document.getElementById('liveBpm');
-  const status  = document.getElementById('bpmStatus');
-  const timeEl  = document.getElementById('scanTimeLeft');
-  const fillEl  = document.getElementById('progressFill');
+  const bpm = document.getElementById('liveBpm');
+  const pill = document.getElementById('bpmPill');
+  const tl   = document.getElementById('scanTimeLeft');
+  const fill = document.getElementById('progFill');
+  const pb   = document.getElementById('progressBar');
 
-  if (liveBpm) liveBpm.textContent = '--';
-  if (status)  { status.textContent = 'Calibrating'; status.className = 'bpm-status'; }
-  if (timeEl)  timeEl.textContent = '30s remaining';
-  if (fillEl)  fillEl.style.width = '0%';
+  if (bpm)  bpm.textContent  = '--';
+  if (pill) { pill.textContent = 'Calibrating'; pill.className = 'bpm-pill'; }
+  if (tl)   tl.textContent   = '30s remaining';
+  if (fill) fill.style.width = '0%';
+  if (pb)   pb.setAttribute('aria-valuenow', '0');
 
   setFeedback('init');
-  updateSignal(0);
+  setSignal(0);
 }
 
-/* ──────────────────────────────────────────
+/* ──────────────────────────────────────
    CANCEL SCAN
-────────────────────────────────────────── */
+────────────────────────────────────── */
 function cancelScan() {
   _stopCamera();
-  _resetScanState();
+  _resetScan();
   showScreen('home');
 }
 
-/* ──────────────────────────────────────────
+/* ──────────────────────────────────────
    STOP CAMERA
-────────────────────────────────────────── */
+────────────────────────────────────── */
 function _stopCamera() {
-  if (App.track) {
-    try { App.track.applyConstraints({ advanced: [{ torch: false }] }); } catch {}
-  }
-  if (App.stream) {
-    App.stream.getTracks().forEach(t => t.stop());
-    App.stream = null;
-    App.track  = null;
-  }
-  if (App.animFrameId)  { cancelAnimationFrame(App.animFrameId); App.animFrameId = null; }
-  if (App.scanInterval) { clearInterval(App.scanInterval); App.scanInterval = null; }
+  if (S.track) { try { S.track.applyConstraints({ advanced: [{ torch: false }] }); } catch {} }
+  S.stream?.getTracks().forEach(t => t.stop());
+  S.stream = null; S.track = null;
+  if (S.rafId)    { cancelAnimationFrame(S.rafId); S.rafId = null; }
+  if (S.scanTimer){ clearInterval(S.scanTimer); S.scanTimer = null; }
 }
 
-/* ──────────────────────────────────────────
+/* ──────────────────────────────────────
    PPG ANALYSIS
-   Three-stage smoothing + adaptive peak detection
-────────────────────────────────────────── */
-function _beginPPGAnalysis(video) {
-  const offCanvas    = document.createElement('canvas');
-  offCanvas.width    = 40;
-  offCanvas.height   = 30;
-  const offCtx       = offCanvas.getContext('2d', { willReadFrequently: true });
+   3-stage: EMA → moving-avg → adaptive peak detection
+────────────────────────────────────── */
+function _beginPPG(vid) {
+  const offC = document.createElement('canvas');
+  offC.width = 40; offC.height = 30;
+  const offCtx = offC.getContext('2d', { willReadFrequently: true });
 
-  const wCanvas      = document.getElementById('waveformCanvas');
-  const wCtx         = wCanvas.getContext('2d');
-  const dpr          = window.devicePixelRatio || 1;
-  wCanvas.width      = wCanvas.offsetWidth  * dpr;
-  wCanvas.height     = wCanvas.offsetHeight * dpr;
+  const wC   = document.getElementById('waveCanvas');
+  const wCtx = wC.getContext('2d');
+  const dpr  = window.devicePixelRatio || 1;
+  wC.width  = wC.offsetWidth  * dpr;
+  wC.height = wC.offsetHeight * dpr;
 
-  const SAMPLE_RATE  = 30;
-  const MIN_PEAK_MS  = 350;   // 350ms minimum RR interval (~172 BPM max)
-  const SMOOTH_K     = 5;     // Moving average window
-  const DC_WINDOW    = 90;    // Samples for baseline
-  const smoothBuf    = [];
-  let   lastPeakIdx  = -1;
-  let   frameIdx     = 0;
+  const SAMPLE_HZ = 30, MIN_PEAK_GAP = 350;
+  const SMOOTH_K  = 5, DC_WIN = 90;
+  const smoothQ   = [];
+  let lastPeakI   = -1, frameI = 0;
 
   function frame() {
-    if (!App.stream) return;
-    frameIdx++;
+    if (!S.stream) return;
+    frameI++; S.frameN++;
 
-    // Sample red channel from tiny canvas
-    offCtx.drawImage(video, 0, 0, 40, 30);
-    const pixels = offCtx.getImageData(0, 0, 40, 30).data;
-    let redSum = 0;
-    for (let i = 0; i < pixels.length; i += 4) redSum += pixels[i];
-    const redRaw = redSum / (pixels.length / 4);
+    offCtx.drawImage(vid, 0, 0, 40, 30);
+    const px = offCtx.getImageData(0, 0, 40, 30).data;
+    let rSum = 0;
+    for (let i = 0; i < px.length; i += 4) rSum += px[i];
+    const raw = rSum / (px.length / 4);
 
-    // Stage 1: EMA (removes HF noise)
-    App.smoothedValue = App.emaAlpha * redRaw + (1 - App.emaAlpha) * App.smoothedValue;
+    /* Stage 1: EMA */
+    S.ema = S.EMA_A * raw + (1 - S.EMA_A) * S.ema;
 
-    // Stage 2: Moving average
-    smoothBuf.push(App.smoothedValue);
-    if (smoothBuf.length > SMOOTH_K) smoothBuf.shift();
-    const smoothed = smoothBuf.reduce((a, b) => a + b, 0) / smoothBuf.length;
+    /* Stage 2: moving average */
+    smoothQ.push(S.ema);
+    if (smoothQ.length > SMOOTH_K) smoothQ.shift();
+    const smooth = smoothQ.reduce((a, b) => a + b, 0) / smoothQ.length;
 
     const now = Date.now();
-    App.ppgBuffer.push(smoothed);
-    App.ppgTimestamps.push(now);
+    S.ppgBuf.push(smooth);
+    S.ppgTs.push(now);
+    if (S.ppgBuf.length > 300) { S.ppgBuf.shift(); S.ppgTs.shift(); }
 
-    // Keep buffer bounded (10s at 30fps = 300 samples)
-    if (App.ppgBuffer.length > 300) {
-      App.ppgBuffer.shift();
-      App.ppgTimestamps.shift();
-    }
+    /* Stage 3: adaptive amplitude → signal quality */
+    const win = S.ppgBuf.slice(-DC_WIN);
+    const lo  = Math.min(...win), hi = Math.max(...win);
+    const amp = hi - lo;
+    const q   = Math.min(5, Math.floor(amp / 1.2));
+    setSignal(q);
 
-    // Compute signal amplitude using recent window
-    const window = App.ppgBuffer.slice(-DC_WINDOW);
-    const dcMin  = Math.min(...window);
-    const dcMax  = Math.max(...window);
-    const amp    = dcMax - dcMin;
+    /* Feedback */
+    if      (frameI < 30) setFeedback('init');
+    else if (q <= 1)      setFeedback('weak');
+    else if (q <= 2)      setFeedback('ok');
+    else                  setFeedback('strong');
 
-    // Signal quality: 0-5
-    const quality = Math.min(5, Math.floor(amp / 1.2));
-    updateSignal(quality);
+    /* Peak detection */
+    const n = S.ppgBuf.length;
+    if (n > 5 && q >= 2) {
+      const c1 = S.ppgBuf[n-3], c2 = S.ppgBuf[n-2], c3 = S.ppgBuf[n-1];
+      const norm = (c2 - lo) / (amp || 1);
+      const isPk  = c2 > c1 && c2 > c3 && norm > 0.55;
+      const gapOk = (n - 2) - lastPeakI > MIN_PEAK_GAP / (1000 / SAMPLE_HZ);
 
-    // Feedback
-    if      (frameIdx < 30)    setFeedback('init');
-    else if (quality <= 1)     setFeedback('weak');
-    else if (quality <= 2)     setFeedback('ok');
-    else                       setFeedback('strong');
+      if (isPk && gapOk) {
+        const pt = S.ppgTs[n - 2];
+        S.peakTs.push(pt);
+        lastPeakI = n - 2;
 
-    // Stage 3: Peak detection (only when signal is decent)
-    const n = App.ppgBuffer.length;
-    if (n > 5 && quality >= 2) {
-      const c1 = App.ppgBuffer[n - 3];
-      const c2 = App.ppgBuffer[n - 2];
-      const c3 = App.ppgBuffer[n - 1];
-      const normC2 = (c2 - dcMin) / (amp || 1);
-      const isPeak = c2 > c1 && c2 > c3 && normC2 > 0.55;
-      const distOk = (n - 2) - lastPeakIdx > (MIN_PEAK_MS / (1000 / SAMPLE_RATE));
-
-      if (isPeak && distOk) {
-        const peakTime = App.ppgTimestamps[n - 2];
-        App.peakTimes.push(peakTime);
-        lastPeakIdx = n - 2;
-
-        // Discard peaks older than 8s
         const cutoff = now - 8000;
-        App.peakTimes = App.peakTimes.filter(t => t > cutoff);
+        S.peakTs = S.peakTs.filter(t => t > cutoff);
 
-        if (App.peakTimes.length >= 3) {
-          const intervals = [];
-          for (let j = 1; j < App.peakTimes.length; j++) {
-            intervals.push(App.peakTimes[j] - App.peakTimes[j - 1]);
-          }
-          // Reject outliers (> 40% from median)
-          const med      = _median(intervals);
-          const filtered = intervals.filter(iv => Math.abs(iv - med) < med * 0.4);
-          if (filtered.length >= 2) {
-            const avgMs  = filtered.reduce((a, b) => a + b, 0) / filtered.length;
+        if (S.peakTs.length >= 3) {
+          const ivs = [];
+          for (let j = 1; j < S.peakTs.length; j++) ivs.push(S.peakTs[j] - S.peakTs[j-1]);
+          const med = median(ivs);
+          const clean = ivs.filter(v => Math.abs(v - med) < med * 0.40);
+          if (clean.length >= 2) {
+            const avgMs = clean.reduce((a, b) => a + b, 0) / clean.length;
             const rawBPM = Math.round(60000 / avgMs);
             if (rawBPM >= 40 && rawBPM <= 200) {
-              App.bpmHistory.push(rawBPM);
-              if (App.bpmHistory.length > 12) App.bpmHistory.shift();
-              const stable = _median(App.bpmHistory);
-              updateBPMDisplay(stable);
-              App.musicBPM = stable;
+              S.bpmHist.push(rawBPM);
+              if (S.bpmHist.length > 12) S.bpmHist.shift();
+              const stable = median(S.bpmHist);
+              setBPM(stable);
+              S.musicBpm = stable;
             }
           }
         }
       }
     }
 
-    // Draw waveform (throttled to every other frame for perf)
-    if (frameIdx % 2 === 0) drawWaveform(wCanvas, wCtx, App.ppgBuffer);
+    /* Draw waveform — throttled to every 2nd frame */
+    if (S.frameN % 2 === 0) drawWave(wC, wCtx, S.ppgBuf);
 
-    App.animFrameId = requestAnimationFrame(frame);
+    S.rafId = requestAnimationFrame(frame);
   }
-
-  App.animFrameId = requestAnimationFrame(frame);
+  S.rafId = requestAnimationFrame(frame);
 }
 
-/* ──────────────────────────────────────────
+/* ──────────────────────────────────────
    SCAN TIMER
-────────────────────────────────────────── */
-function _beginScanTimer() {
-  App.scanInterval = setInterval(() => {
-    App.scanElapsed++;
-    const remaining = App.SCAN_DURATION - App.scanElapsed;
-    const pct       = (App.scanElapsed / App.SCAN_DURATION) * 100;
-    const timeEl    = document.getElementById('scanTimeLeft');
-    const fillEl    = document.getElementById('progressFill');
-    if (timeEl) timeEl.textContent = `${remaining}s remaining`;
-    if (fillEl) fillEl.style.width = `${pct}%`;
-    if (App.scanElapsed >= App.SCAN_DURATION) {
-      clearInterval(App.scanInterval);
-      App.scanInterval = null;
-      _finalizeScan();
+────────────────────────────────────── */
+function _beginTimer() {
+  S.scanTimer = setInterval(() => {
+    S.elapsed++;
+    const rem  = S.SCAN_SEC - S.elapsed;
+    const pct  = (S.elapsed / S.SCAN_SEC) * 100;
+    const tl   = document.getElementById('scanTimeLeft');
+    const fill = document.getElementById('progFill');
+    const pb   = document.getElementById('progressBar');
+
+    if (tl)   tl.textContent   = `${rem}s remaining`;
+    if (fill) fill.style.width = `${pct}%`;
+    if (pb)   pb.setAttribute('aria-valuenow', S.elapsed);
+
+    if (S.elapsed >= S.SCAN_SEC) {
+      clearInterval(S.scanTimer); S.scanTimer = null;
+      _finalize();
     }
   }, 1000);
 }
 
-/* ──────────────────────────────────────────
-   FINALIZE SCAN
-────────────────────────────────────────── */
-function _finalizeScan() {
+/* ──────────────────────────────────────
+   FINALIZE SCAN → RESULTS
+────────────────────────────────────── */
+function _finalize() {
   _stopCamera();
 
-  // Final BPM
+  /* Compute final BPM */
   let bpm;
-  if (App.bpmHistory.length >= 3) {
-    bpm = _median(App.bpmHistory);
+  if (S.bpmHist.length >= 3) {
+    bpm = median(S.bpmHist);
   } else {
-    bpm = 60 + Math.round(Math.random() * 35);
-    showToast('Weak signal — estimated result shown', 'warn');
+    bpm = 62 + Math.round(Math.random() * 30);
+    toast('Weak signal — estimated result shown', 'warn', 4000);
   }
   bpm = Math.max(40, Math.min(200, bpm));
 
-  // HRV from peak intervals
+  /* Compute HRV from RR intervals */
   let hrv = 45;
-  if (App.peakTimes.length > 3) {
+  if (S.peakTs.length > 3) {
     const ivs = [];
-    for (let j = 1; j < App.peakTimes.length; j++) ivs.push(App.peakTimes[j] - App.peakTimes[j - 1]);
+    for (let j = 1; j < S.peakTs.length; j++) ivs.push(S.peakTs[j] - S.peakTs[j-1]);
     const mean = ivs.reduce((a, b) => a + b, 0) / ivs.length;
     const sd   = Math.sqrt(ivs.reduce((s, v) => s + (v - mean) ** 2, 0) / ivs.length);
     hrv = Math.max(12, Math.min(95, Math.round(sd * 0.35 + 20)));
   }
 
-  const minBpm = Math.max(40, bpm - Math.round(Math.random() * 6 + 2));
-  const maxBpm = Math.min(200, bpm + Math.round(Math.random() * 6 + 2));
-  const mood   = _getMood(bpm, hrv);
+  const minBpm = Math.max(40, bpm - Math.round(Math.random() * 7 + 2));
+  const maxBpm = Math.min(200, bpm + Math.round(Math.random() * 7 + 2));
+  const mood   = _mood(bpm, hrv);
 
-  App.finalBPM  = bpm;
-  App.finalHRV  = hrv;
-  App.finalMin  = minBpm;
-  App.finalMax  = maxBpm;
-  App.finalMood = mood;
-  App.musicBPM  = bpm;
+  S.bpm = bpm; S.hrv = hrv; S.minBpm = minBpm; S.maxBpm = maxBpm;
+  S.mood = mood; S.musicBpm = bpm;
 
-  _populateResults(bpm, hrv, minBpm, maxBpm, mood);
+  _fillResults();
   showScreen('results');
 
-  // Music generation: show indicator, then start
-  const genEl = document.getElementById('musicGenerating');
-  if (genEl) genEl.hidden = false;
+  /* Show generating banner, then start music */
+  const banner = document.getElementById('genBanner');
+  if (banner) banner.hidden = false;
 
-  startResultWaveform(bpm);
+  startResultWave(bpm);
 
   setTimeout(async () => {
-    if (genEl) genEl.hidden = true;
-    await _startResultsMusic(bpm, hrv);
-  }, 1200);
+    if (banner) banner.hidden = true;
+    await _startMusic(bpm, hrv);
+  }, 1300);
 }
 
-/* ──────────────────────────────────────────
-   POPULATE RESULTS SCREEN
-────────────────────────────────────────── */
-function _populateResults(bpm, hrv, minBpm, maxBpm, mood) {
-  _set('resultBpm', bpm);
-  _set('metricHRV', hrv);
-  _set('metricMin', minBpm);
-  _set('metricMax', maxBpm);
-  _set('sessionNameInput', '', 'value');
+/* ──────────────────────────────────────
+   FILL RESULTS SCREEN
+────────────────────────────────────── */
+function _fillResults() {
+  const { bpm, hrv, minBpm, maxBpm, mood } = S;
 
-  // Stress card
-  const card  = document.getElementById('stressCard');
-  const badge = document.getElementById('stressBadge');
-  const desc  = document.getElementById('stressDesc');
-  const DATA  = {
-    calm:   { badge:'🟢 Calm',            desc:'Your heart rate is low and your autonomic nervous system is well balanced — you are in a deeply relaxed state.' },
-    normal: { badge:'🟡 Mildly Active',    desc:'Your heart rate is slightly elevated — this could be light activity, caffeine, or mild stress. Nothing to worry about.' },
-    stress: { badge:'🔴 Elevated Stress',  desc:'Elevated heart rate and reduced HRV indicate stress. Try slow deep breaths, hydrate, and rest when possible.' },
+  $set('resBpm', bpm);
+  $set('metHRV', hrv);
+  $set('metMin', minBpm);
+  $set('metMax', maxBpm);
+  $set('sessNameInput', '', 'value');
+
+  /* Wellness card */
+  const WELL = {
+    calm:   { badge:'● Calm',           desc:'Your heart rate is low and your nervous system is well-balanced — you\'re in a deeply relaxed state.' },
+    normal: { badge:'● Mildly Active',  desc:'Your heart rate is mildly elevated — possible from light activity or caffeine. Overall, you\'re doing well.' },
+    stress: { badge:'● Elevated',       desc:'Elevated BPM and lower HRV suggest stress. Try slow, deep breathing and stay hydrated.' },
   };
-  if (card)  card.className  = `stress-card ${mood}`;
-  if (badge) { badge.className = `stress-badge ${mood}`; badge.textContent = DATA[mood].badge; }
-  if (desc)  desc.textContent = DATA[mood].desc;
+  const d = WELL[mood] || WELL.normal;
+  const wCard  = document.getElementById('wellCard');
+  const wBadge = document.getElementById('wellBadge');
+  const wDesc  = document.getElementById('wellDesc');
+  if (wCard)  wCard.className  = `wellness ${mood}`;
+  if (wBadge) { wBadge.className = `wellness-badge ${mood}`; wBadge.textContent = d.badge; }
+  if (wDesc)  wDesc.textContent = d.desc;
 
-  // Music metadata
-  const meta = AudioEngine.getMusicMeta(bpm, hrv);
-  _set('musicTitle',    meta.title);
-  _set('musicSubtitle', meta.subtitle);
+  /* Music metadata */
+  const meta = AudioEngine.getMeta(bpm, hrv);
+  $set('mxTitle', meta.title);
+  $set('mxSub',   meta.subtitle);
 
-  // Tempo slider
-  const slider = document.getElementById('tempoSlider');
-  if (slider) slider.value = bpm;
-  _set('tempoVal', bpm);
+  /* Tempo slider */
+  const sl = document.getElementById('tempoSlider');
+  if (sl) sl.value = bpm;
+  $set('tempoVal', bpm);
 
-  // Duration
+  /* Duration */
   const dur = AudioEngine.getDuration() || 60;
-  _set('musicDuration', `${dur}s`);
-  _set('playbackTotal', _fmtTime(dur));
-  _set('playbackElapsed', '0:00');
+  $set('mxDur', `${dur}s`);
+  $set('pbTotal', fmtTime(dur));
+  $set('pbElapsed', '0:00');
 
-  const fillEl = document.getElementById('playbackFill');
-  if (fillEl) fillEl.style.width = '0%';
+  const fill = document.getElementById('pbFill');
+  if (fill) fill.style.width = '0%';
+
+  /* Play button reset */
+  _setPlayBtn(false);
 }
 
-async function _startResultsMusic(bpm, hrv) {
+async function _startMusic(bpm, hrv) {
   const ok = await AudioEngine.start(bpm, hrv);
   if (!ok) {
-    showToast('Audio blocked — tap Play to start music', 'warn', 4000);
+    toast('Audio blocked — tap ▶ to start music', 'warn', 5000);
     return;
   }
   _setPlayBtn(true);
-  startPlaybackTimer(AudioEngine.getDuration());
+  startPBTimer(AudioEngine.getDuration());
 }
 
-/* ──────────────────────────────────────────
-   TOGGLE MUSIC (results screen)
-────────────────────────────────────────── */
+/* ──────────────────────────────────────
+   TOGGLE MUSIC (results)
+────────────────────────────────────── */
 async function toggleMusic() {
   if (AudioEngine.getIsPlaying()) {
     AudioEngine.fadeOut();
     _setPlayBtn(false);
-    stopPlaybackTimer();
+    stopPBTimer();
   } else {
-    const bpm = App.musicBPM || App.finalBPM;
-    const ok  = await AudioEngine.start(bpm, App.finalHRV);
+    const ok = await AudioEngine.start(S.musicBpm || S.bpm, S.hrv);
     if (ok) {
       _setPlayBtn(true);
-      startPlaybackTimer(AudioEngine.getDuration());
+      startPBTimer(AudioEngine.getDuration());
     } else {
-      showToast('Could not start audio. Tap once more to try again.', 'warn');
+      toast('Could not start audio — tap once more', 'warn');
     }
   }
 }
@@ -669,99 +603,96 @@ async function toggleMusic() {
 function _setPlayBtn(playing) {
   const btn = document.getElementById('playBtn');
   if (!btn) return;
-  btn.textContent   = playing ? '⏸' : '▶';
+  btn.textContent = playing ? '⏸' : '▶';
   btn.setAttribute('aria-label', playing ? 'Pause heartbeat music' : 'Play heartbeat music');
   btn.classList.toggle('playing', playing);
 }
 
-/* ──────────────────────────────────────────
-   ADJUST TEMPO (results screen slider)
-────────────────────────────────────────── */
+/* ──────────────────────────────────────
+   TEMPO SLIDER
+────────────────────────────────────── */
 function adjustTempo(val) {
   const bpm = parseInt(val, 10);
-  _set('tempoVal', bpm);
-  App.musicBPM = bpm;
+  S.musicBpm = bpm;
+  $set('tempoVal', bpm);
   if (AudioEngine.getIsPlaying()) {
-    AudioEngine.start(bpm, App.finalHRV);
-    startPlaybackTimer(AudioEngine.getDuration());
+    AudioEngine.start(bpm, S.hrv);
+    startPBTimer(AudioEngine.getDuration());
   }
-  const dur = Math.ceil(Math.ceil(60 / (60 / bpm)) * (60 / bpm));
-  _set('musicDuration', `${dur}s`);
-  _set('playbackTotal', _fmtTime(dur));
+  const dur = AudioEngine.getDuration() || 60;
+  $set('mxDur', `${dur}s`);
+  $set('pbTotal', fmtTime(dur));
 }
 
-/* ──────────────────────────────────────────
+/* ──────────────────────────────────────
    SAVE SESSION
-────────────────────────────────────────── */
+────────────────────────────────────── */
 async function saveSession() {
-  const name = document.getElementById('sessionNameInput')?.value?.trim() || '';
-  const session = Storage.buildSession({
-    bpm:    App.finalBPM,
-    hrv:    App.finalHRV,
-    minBpm: App.finalMin,
-    maxBpm: App.finalMax,
-    mood:   App.finalMood,
-    tempo:  App.musicBPM || App.finalBPM,
-    name,
+  const name = document.getElementById('sessNameInput')?.value?.trim() || '';
+  const sess = Storage.buildSession({
+    bpm: S.bpm, hrv: S.hrv, minBpm: S.minBpm, maxBpm: S.maxBpm,
+    mood: S.mood, tempo: S.musicBpm || S.bpm, name,
   });
-
   try {
-    await Storage.saveSession(session);
-    showToast('💾 Session saved to your library', 'success');
-    renderLibrary(); // refresh if already rendered
+    await Storage.saveSession(sess);
+    toast('Session saved to your library ✓', 'success');
+    _updateBadge();
+    renderLibrary();
   } catch(e) {
-    console.error('[App] Save error:', e);
-    showToast('Could not save session. Storage may be full.', 'error');
+    console.error(e);
+    toast('Could not save — storage may be full', 'error');
   }
 }
 
-/* ──────────────────────────────────────────
-   LIBRARY RENDERING
-────────────────────────────────────────── */
+/* ──────────────────────────────────────
+   LIBRARY
+────────────────────────────────────── */
 async function renderLibrary() {
-  const listEl  = document.getElementById('libraryList');
-  const emptyEl = document.getElementById('libraryEmpty');
-  const countEl = document.getElementById('libraryCount');
-  if (!listEl) return;
+  const list  = document.getElementById('libList');
+  const empty = document.getElementById('libEmpty');
+  const count = document.getElementById('libCount');
+  if (!list) return;
 
   let sessions = [];
   try { sessions = await Storage.loadSessions(); } catch {}
 
-  if (countEl) countEl.textContent = `${sessions.length} session${sessions.length !== 1 ? 's' : ''}`;
+  if (count) count.textContent = `${sessions.length} session${sessions.length !== 1 ? 's' : ''}`;
 
   if (sessions.length === 0) {
-    if (emptyEl) emptyEl.hidden = false;
-    listEl.innerHTML = '';
+    if (empty) empty.hidden = false;
+    list.innerHTML = '';
     return;
   }
-  if (emptyEl) emptyEl.hidden = true;
+  if (empty) empty.hidden = true;
 
-  listEl.innerHTML = sessions.map(s => `
-    <article class="session-card ${s.mood}" aria-label="Session: ${_esc(s.name)}">
-      <div class="session-top">
-        <div class="session-name-display" id="name-d-${s.id}">${_esc(s.name)}</div>
-        <input class="session-name-edit" id="name-e-${s.id}"
-          value="${_esc(s.name)}" maxlength="40" aria-label="Edit session name"
+  list.innerHTML = sessions.map(s => `
+    <article class="sess-card ${s.mood}" role="listitem"
+      aria-label="Session: ${esc(s.name)}">
+      <div class="sess-top">
+        <div class="sess-name" id="sn-d-${s.id}">${esc(s.name)}</div>
+        <input class="sess-name-edit" id="sn-e-${s.id}"
+          value="${esc(s.name)}" maxlength="40"
+          aria-label="Edit name for ${esc(s.name)}"
           autocomplete="off" autocorrect="off" spellcheck="false"
           onblur="finishRename(${s.id})"
           onkeydown="if(event.key==='Enter')this.blur()">
-        <div class="session-actions" role="group" aria-label="Session actions">
-          <button class="session-btn" id="lib-play-${s.id}"
-            onclick="playLibrarySession(${s.id})"
-            aria-label="Play music for ${_esc(s.name)}">▶</button>
-          <button class="session-btn"
+        <div class="sess-actions" role="group" aria-label="Session actions">
+          <button class="sess-btn" id="lp-${s.id}"
+            onclick="playLib(${s.id})"
+            aria-label="Play music for ${esc(s.name)}">▶</button>
+          <button class="sess-btn"
             onclick="startRename(${s.id})"
-            aria-label="Rename ${_esc(s.name)}">✏️</button>
-          <button class="session-btn danger"
-            onclick="confirmDelete(${s.id})"
-            aria-label="Delete ${_esc(s.name)}">🗑</button>
+            aria-label="Rename ${esc(s.name)}">✏️</button>
+          <button class="sess-btn del"
+            onclick="confirmDel(${s.id})"
+            aria-label="Delete ${esc(s.name)}">🗑</button>
         </div>
       </div>
-      <div class="session-meta" aria-label="Session details">
-        <span class="chip chip--bpm">❤️ ${s.bpm} BPM</span>
-        <span class="chip">HRV ${s.hrv}ms</span>
-        <span class="chip">${_moodLabel(s.mood)}</span>
-        <span class="chip chip--date">${s.date} · ${s.time}</span>
+      <div class="sess-chips" aria-label="Session details">
+        <span class="chip chip--vital">❤ ${s.bpm} BPM</span>
+        <span class="chip chip--teal">HRV ${s.hrv}ms</span>
+        <span class="chip">${moodLabel(s.mood)}</span>
+        <span class="chip">${s.date} · ${s.time}</span>
       </div>
     </article>
   `).join('');
@@ -769,143 +700,191 @@ async function renderLibrary() {
 
 /* ── Rename ── */
 function startRename(id) {
-  document.getElementById(`name-d-${id}`).style.display = 'none';
-  const input = document.getElementById(`name-e-${id}`);
-  input.style.display = 'block';
-  input.focus();
-  input.select();
+  document.getElementById(`sn-d-${id}`).style.display = 'none';
+  const inp = document.getElementById(`sn-e-${id}`);
+  inp.style.display = 'block'; inp.focus(); inp.select();
 }
 
 async function finishRename(id) {
-  const input   = document.getElementById(`name-e-${id}`);
-  const display = document.getElementById(`name-d-${id}`);
-  if (!input || !display) return;
-  const newName = input.value.trim() || `Session ${id}`;
+  const inp = document.getElementById(`sn-e-${id}`);
+  const disp = document.getElementById(`sn-d-${id}`);
+  if (!inp || !disp) return;
+  const name = inp.value.trim() || `Session ${id}`;
   try {
-    await Storage.renameSession(id, newName);
-    display.textContent = newName;
-    showToast('✏️ Session renamed', 'success');
+    await Storage.renameSession(id, name);
+    disp.textContent = name;
+    toast('Session renamed ✓', 'success');
   } catch {
-    showToast('Could not rename session', 'error');
+    toast('Rename failed', 'error');
   }
-  display.style.display = '';
-  input.style.display   = 'none';
+  disp.style.display = ''; inp.style.display = 'none';
 }
 
-/* ── Delete (with confirm) ── */
-let _pendingDeleteId = null;
-
-function confirmDelete(id) {
-  _pendingDeleteId = id;
-  const overlay = document.getElementById('confirmOverlay');
-  if (overlay) {
-    overlay.hidden = false;
-    overlay.removeAttribute('aria-hidden');
-    document.getElementById('dialogConfirmBtn')?.focus();
-  }
-}
-
-async function executeDelete() {
-  if (_pendingDeleteId === null) return;
-  if (App.libraryPlayingId === _pendingDeleteId) {
-    AudioEngine.stop();
-    App.libraryPlayingId = null;
-  }
+/* ── Delete (immediate — no confirmation dialog) ── */
+async function confirmDel(id) {
+  if (S.libPlayingId === id) { AudioEngine.stop(); S.libPlayingId = null; }
   try {
-    await Storage.deleteSession(_pendingDeleteId);
-    showToast('🗑 Session deleted', 'info');
-  } catch {
-    showToast('Could not delete session', 'error');
-  }
-  _pendingDeleteId = null;
-  closeDialog();
+    await Storage.deleteSession(id);
+    toast('Session deleted', '');
+    _updateBadge();
+  } catch { toast('Delete failed', 'error'); }
   renderLibrary();
 }
 
-function closeDialog() {
-  const overlay = document.getElementById('confirmOverlay');
-  if (overlay) { overlay.hidden = true; overlay.setAttribute('aria-hidden', 'true'); }
-  _pendingDeleteId = null;
-}
-
-/* ── Play library session ── */
-async function playLibrarySession(id) {
+/* ── Play from library ── */
+async function playLib(id) {
   let sessions = [];
   try { sessions = await Storage.loadSessions(); } catch {}
-  const session = sessions.find(s => s.id === id);
-  if (!session) return;
+  const sess = sessions.find(s => s.id === id);
+  if (!sess) return;
 
-  const btn = document.getElementById(`lib-play-${id}`);
+  const btn = document.getElementById(`lp-${id}`);
 
-  // Toggle off if already playing
-  if (App.libraryPlayingId === id && AudioEngine.getIsPlaying()) {
+  if (S.libPlayingId === id && AudioEngine.getIsPlaying()) {
     AudioEngine.fadeOut();
-    App.libraryPlayingId = null;
+    S.libPlayingId = null;
     if (btn) { btn.textContent = '▶'; btn.classList.remove('playing'); }
     return;
   }
 
-  // Stop any running session
   AudioEngine.stop();
-  document.querySelectorAll('.session-btn.playing').forEach(b => {
+  document.querySelectorAll('.sess-btn.playing').forEach(b => {
     b.textContent = '▶'; b.classList.remove('playing');
   });
 
-  App.finalHRV      = session.hrv;
-  App.libraryPlayingId = id;
-
-  const ok = await AudioEngine.start(session.bpm, session.hrv, () => {
+  S.libPlayingId = id;
+  const ok = await AudioEngine.start(sess.bpm, sess.hrv, () => {
     if (btn) { btn.textContent = '▶'; btn.classList.remove('playing'); }
-    App.libraryPlayingId = null;
+    S.libPlayingId = null;
   });
-
   if (ok && btn) {
     btn.textContent = '⏸';
-    btn.setAttribute('aria-label', `Pause ${_esc(session.name)}`);
+    btn.setAttribute('aria-label', `Pause ${esc(sess.name)}`);
     btn.classList.add('playing');
-    showToast(`🎵 Playing: ${session.name}`, 'info');
+    toast(`Playing: ${sess.name}`, '');
   }
 }
 
-/* ──────────────────────────────────────────
-   UTILITY
-────────────────────────────────────────── */
-function _set(id, val, prop = 'textContent') {
+/* ──────────────────────────────────────
+   BADGE UPDATE
+────────────────────────────────────── */
+async function _updateBadge() {
+  try {
+    const sessions = await Storage.loadSessions();
+    const badge = document.getElementById('libBadge');
+    if (!badge) return;
+    if (sessions.length > 0) { badge.textContent = sessions.length; badge.hidden = false; }
+    else badge.hidden = true;
+  } catch {}
+}
+
+/* ──────────────────────────────────────
+   HOME ECG ANIMATION
+────────────────────────────────────── */
+function startHomeECG() {
+  const canvas = document.getElementById('ecgCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+
+  function resize() {
+    canvas.width  = canvas.offsetWidth  * dpr;
+    canvas.height = canvas.offsetHeight * dpr;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  let x = 0;
+  const ecgPoints = [];
+  // Precompute one full ECG cycle
+  const cycle = 120;
+  for (let i = 0; i < cycle; i++) {
+    const t = i / cycle;
+    let y = 0;
+    if      (t < 0.1)  y = 0;
+    else if (t < 0.15) y = -0.15 * Math.sin((t-0.1)/0.05 * Math.PI);
+    else if (t < 0.25) y = 0;
+    else if (t < 0.28) y = 0.25 * Math.sin((t-0.25)/0.03 * Math.PI);
+    else if (t < 0.32) y = -1.0  * Math.sin((t-0.28)/0.04 * Math.PI);
+    else if (t < 0.36) y = 0.6   * Math.sin((t-0.32)/0.04 * Math.PI);
+    else if (t < 0.40) y = 0;
+    else if (t < 0.50) y = 0.18  * Math.sin((t-0.40)/0.10 * Math.PI);
+    else               y = 0;
+    ecgPoints.push(y);
+  }
+
+  const history = new Array(200).fill(0);
+  let frame = 0;
+
+  function draw() {
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+
+    history.push(ecgPoints[frame % cycle]);
+    if (history.length > W / dpr) history.shift();
+
+    const pts = history;
+    const N   = pts.length;
+
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(232,51,74,0.15)';
+    ctx.lineWidth = 6 * dpr; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    pts.forEach((v, i) => {
+      const px = (i / (N - 1)) * W;
+      const py = H/2 - v * H * 0.38;
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.strokeStyle = '#e8334a';
+    ctx.lineWidth = 1.5 * dpr;
+    pts.forEach((v, i) => {
+      const px = (i / (N - 1)) * W;
+      const py = H/2 - v * H * 0.38;
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+
+    frame = (frame + 1) % (cycle * 2);
+    requestAnimationFrame(draw);
+  }
+  draw();
+}
+
+/* ──────────────────────────────────────
+   UTILITIES
+────────────────────────────────────── */
+function $set(id, val, prop = 'textContent') {
   const el = document.getElementById(id);
   if (el) el[prop] = val;
 }
 
-function _esc(str) {
+function esc(str) {
   return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function _getMood(bpm, hrv) {
+function _mood(bpm, hrv) {
   if (bpm < 65 || hrv > 55)   return 'calm';
   if (bpm > 100 || hrv < 20)  return 'stress';
   if (bpm >= 65 && bpm <= 85) return 'calm';
   return 'normal';
 }
 
-function _moodLabel(mood) {
-  return { calm:'🟢 Calm', normal:'🟡 Balanced', stress:'🔴 Elevated' }[mood] || mood;
+function moodLabel(m) {
+  return { calm:'● Calm', normal:'● Balanced', stress:'● Elevated' }[m] || m;
 }
 
-function _fmtTime(sec) {
-  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
-}
-
-/* ──────────────────────────────────────────
+/* ──────────────────────────────────────
    RESIZE HANDLER
-────────────────────────────────────────── */
-let _resizeTimer;
+────────────────────────────────────── */
+let _rszT;
 window.addEventListener('resize', () => {
-  clearTimeout(_resizeTimer);
-  _resizeTimer = setTimeout(() => {
-    const wc = document.getElementById('waveformCanvas');
+  clearTimeout(_rszT);
+  _rszT = setTimeout(() => {
+    const wc = document.getElementById('waveCanvas');
     if (wc) {
       const dpr = window.devicePixelRatio || 1;
       wc.width  = wc.offsetWidth  * dpr;
@@ -914,40 +893,25 @@ window.addEventListener('resize', () => {
   }, 200);
 });
 
-/* ──────────────────────────────────────────
+/* ──────────────────────────────────────
    INIT
-────────────────────────────────────────── */
+────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', async () => {
-  // Register service worker
+  /* Service worker */
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./service-worker.js')
-      .then(() => console.log('[SW] Registered'))
-      .catch(err => console.warn('[SW] Registration failed:', err));
+      .then(() => console.log('[SW] registered'))
+      .catch(e => console.warn('[SW] failed', e));
   }
 
-  // Init storage
+  /* Storage */
   await Storage.init();
 
-  // Init library count badge
-  try {
-    const sessions = await Storage.loadSessions();
-    const badge    = document.getElementById('libBadge');
-    if (badge && sessions.length > 0) {
-      badge.textContent = sessions.length;
-      badge.hidden = false;
-    }
-  } catch {}
+  /* Badge count */
+  await _updateBadge();
 
-  // Close confirm overlay on backdrop click
-  const overlay = document.getElementById('confirmOverlay');
-  if (overlay) {
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) closeDialog();
-    });
-  }
+  /* Home ECG animation */
+  startHomeECG();
 
-  // Keyboard trap in dialog
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeDialog();
-  });
+  /* Keyboard trap no longer needed — dialog removed */
 });

@@ -2,446 +2,463 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <meta name="description" content="Detect your heartbeat with your phone camera and transform it into music. Real-time BPM, HRV analysis, and a personalized soundtrack.">
-  <meta name="theme-color" content="#080b10">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="HB Studio">
-  <meta name="mobile-web-app-capable" content="yes">
-
-  <!-- Open Graph -->
-  <meta property="og:title" content="HeartBeat Studio">
-  <meta property="og:description" content="Turn your heartbeat into music">
-  <meta property="og:type" content="website">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover">
+  <meta name="description"              content="Detect your heartbeat with your phone camera and transform it into personalized music. Real-time BPM, HRV analysis, and a unique soundtrack.">
+  <meta name="theme-color"              content="#060810">
+  <meta name="apple-mobile-web-app-capable"            content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style"   content="black-translucent">
+  <meta name="apple-mobile-web-app-title"              content="HB Studio">
+  <meta name="mobile-web-app-capable"                  content="yes">
+  <meta property="og:title"       content="HeartBeat Studio">
+  <meta property="og:description" content="Your heartbeat, turned into music.">
+  <meta property="og:type"        content="website">
 
   <title>HeartBeat Studio</title>
 
-  <link rel="manifest" href="./manifest.json">
+  <link rel="manifest"         href="./manifest.json">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet"       href="./styles.css">
 </head>
 <body>
 
-<!-- Skip navigation for keyboard users -->
-<a class="skip-link" href="#main-content">Skip to content</a>
+<!-- ── Skip nav ── -->
+<a class="skip-link" href="#appRoot">Skip to content</a>
 
-<!-- Ambient atmospheric background -->
-<div class="ambient" aria-hidden="true"></div>
+<!-- ── Atmospheric ambient ── -->
+<div class="ambient" aria-hidden="true">
+  <div class="ambient__orb ambient__orb--red"></div>
+  <div class="ambient__orb ambient__orb--teal"></div>
+  <div class="ambient__orb ambient__orb--mid"></div>
+</div>
 
-<!-- App shell -->
-<div class="app" id="main-content">
+<!-- ═══════════════════════════════════════════
+     APP ROOT
+═══════════════════════════════════════════ -->
+<div class="app" id="appRoot">
 
-  <!-- ════════════════════════════════
-       SCREEN: HOME
-  ════════════════════════════════ -->
-  <main class="screen active" id="screenHome" role="main" aria-label="Home">
 
-    <header class="page-header">
-      <p class="page-header__eyebrow" aria-hidden="true">
-        <span class="blink-dot"></span>
-        Live Biometric Studio
-      </p>
-      <h1 class="page-header__title">HeartBeat<br><em>Studio</em></h1>
-      <p class="page-header__sub">Turn your pulse into music</p>
-    </header>
+<!-- ════════════════════════════════════════
+     HOME SCREEN
+════════════════════════════════════════ -->
+<main class="screen active" id="scrHome" role="main" aria-label="Home">
 
-    <!-- Hero graphic -->
-    <div class="hero-visual" aria-hidden="true">
-      <svg class="hero-ring" viewBox="0 0 148 148" fill="none" aria-hidden="true">
-        <defs>
-          <linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stop-color="#e8334a"/>
-            <stop offset="100%" stop-color="#3de8c4"/>
-          </linearGradient>
-        </defs>
-        <circle cx="74" cy="74" r="66" stroke="url(#ringGrad)"
-          stroke-width="1.5" stroke-dasharray="7 5" opacity="0.5"/>
-        <circle cx="74" cy="10" r="3" fill="#e8334a"/>
-        <circle cx="138" cy="74" r="3" fill="#3de8c4"/>
-        <circle cx="74" cy="138" r="3" fill="#e8334a" opacity="0.4"/>
-        <circle cx="10" cy="74" r="3" fill="#3de8c4" opacity="0.4"/>
-      </svg>
-      <div class="hero-icon">❤️</div>
+  <div class="home-top">
+    <p class="home-eyebrow" aria-hidden="true">
+      <span class="dot-live"></span>
+      Biometric Studio
+    </p>
+    <h1 class="home-title">
+      Heart<span>Beat</span><br>Studio
+    </h1>
+    <p class="home-sub">Your pulse · Transformed into music</p>
+  </div>
+
+  <!-- ECG animation -->
+  <div class="ecg-hero" aria-hidden="true">
+    <canvas class="ecg-canvas" id="ecgCanvas"></canvas>
+  </div>
+
+  <!-- Feature stats -->
+  <div class="stats-row" role="list" aria-label="App capabilities">
+    <div class="stat-box" role="listitem">
+      <div class="stat-box__num">PPG</div>
+      <div class="stat-box__lbl">Detection</div>
     </div>
-
-    <!-- Feature grid -->
-    <div class="feature-grid" role="list" aria-label="App features">
-      <div class="feature-cell" role="listitem">
-        <span class="feature-cell__icon" aria-hidden="true">📷</span>
-        <span class="feature-cell__label">Camera PPG pulse detection</span>
-      </div>
-      <div class="feature-cell" role="listitem">
-        <span class="feature-cell__icon" aria-hidden="true">🎵</span>
-        <span class="feature-cell__label">Heartbeat-generated music</span>
-      </div>
-      <div class="feature-cell" role="listitem">
-        <span class="feature-cell__icon" aria-hidden="true">📊</span>
-        <span class="feature-cell__label">Real-time BPM &amp; HRV</span>
-      </div>
-      <div class="feature-cell" role="listitem">
-        <span class="feature-cell__icon" aria-hidden="true">💾</span>
-        <span class="feature-cell__label">Save &amp; replay sessions</span>
-      </div>
+    <div class="stat-box" role="listitem">
+      <div class="stat-box__num">HRV</div>
+      <div class="stat-box__lbl">Analysis</div>
     </div>
+    <div class="stat-box" role="listitem">
+      <div class="stat-box__num">60s</div>
+      <div class="stat-box__lbl">Music</div>
+    </div>
+  </div>
 
-    <!-- Instructions -->
-    <div class="instruction-card" role="note">
+  <!-- How to use -->
+  <div class="how-note" role="note">
+    <span class="how-note__icon" aria-hidden="true">💡</span>
+    <p class="how-note__text">
       Place your <strong>fingertip firmly</strong> over the
-      <strong>rear camera lens</strong> and hold still for
-      <strong>30 seconds</strong> to get accurate results.
-    </div>
+      <strong>rear camera lens</strong> and hold completely still for
+      <strong>30 seconds</strong> to get the most accurate results.
+    </p>
+  </div>
 
-    <!-- Sticky CTA -->
-    <div class="cta-footer">
-      <button
-        class="btn btn--primary"
-        onclick="startScan()"
-        aria-label="Start a 30-second heartbeat scan">
-        <span aria-hidden="true">❤️</span>
-        Begin Heart Scan
-      </button>
-    </div>
-
-  </main>
-
-  <!-- ════════════════════════════════
-       SCREEN: SCANNING
-  ════════════════════════════════ -->
-  <section class="screen" id="screenScan" role="region" aria-label="Heartbeat scanning" aria-live="polite">
-
-    <header class="scan-header">
-      <p class="scan-header__label" aria-hidden="true">
-        <span class="blink-dot"></span>
-        Scanning
-      </p>
-      <h2 class="scan-header__title">Detecting<br>Your Pulse</h2>
-    </header>
-
-    <!-- Camera preview -->
-    <div class="camera-ring" role="img" aria-label="Camera preview — cover with fingertip">
-      <video id="cameraVideo" class="camera-ring__video"
-        autoplay playsinline muted
-        aria-label="Camera feed for pulse detection"></video>
-      <div class="camera-ring__border" aria-hidden="true"></div>
-      <div class="camera-ring__spinner" aria-hidden="true"></div>
-    </div>
-
-    <!-- Feedback -->
-    <div class="feedback-strip" id="feedbackStrip" role="status" aria-live="polite">
-      <span class="feedback-icon" id="feedbackIcon" aria-hidden="true">👆</span>
-      <span id="feedbackText">Cover the rear camera lens with your fingertip and hold still.</span>
-    </div>
-
-    <!-- Signal strength -->
-    <div class="signal-row" role="group" aria-label="Signal strength">
-      <span class="signal-label" id="signalLabel" aria-hidden="true">Signal</span>
-      <div class="signal-bars" aria-hidden="true">
-        <div class="signal-bar" id="sb1"></div>
-        <div class="signal-bar" id="sb2"></div>
-        <div class="signal-bar" id="sb3"></div>
-        <div class="signal-bar" id="sb4"></div>
-        <div class="signal-bar" id="sb5"></div>
-      </div>
-      <span class="signal-text" id="signalValue" aria-hidden="true">—</span>
-    </div>
-
-    <!-- Live BPM -->
-    <div class="bpm-row">
-      <div class="bpm-number" id="liveBpm" aria-label="Current heart rate">--</div>
-      <div class="bpm-meta">
-        <span class="bpm-unit" aria-hidden="true">BPM</span>
-        <span class="bpm-status" id="bpmStatus">Calibrating</span>
-      </div>
-    </div>
-
-    <!-- Waveform -->
-    <canvas class="waveform-canvas" id="waveformCanvas"
-      role="img" aria-label="Heartbeat waveform visualization"></canvas>
-
-    <!-- Scan progress -->
-    <div class="scan-progress" role="group" aria-label="Scan progress">
-      <div class="scan-progress__labels">
-        <span>Scan in progress</span>
-        <span id="scanTimeLeft" aria-live="polite">30s remaining</span>
-      </div>
-      <div class="progress-track" role="progressbar"
-        aria-valuemin="0" aria-valuemax="30" aria-valuenow="0" id="progressBar">
-        <div class="progress-fill" id="progressFill"></div>
-      </div>
-    </div>
-
-    <div class="mt-auto mt-4">
-      <button class="btn btn--secondary"
-        onclick="cancelScan()"
-        aria-label="Cancel scan and return to home">
-        Cancel Scan
-      </button>
-    </div>
-
-    <!-- Screen reader live regions -->
-    <div class="sr-only" aria-live="polite" id="bpmLive"></div>
-    <div class="sr-only" aria-live="polite" id="signalLive"></div>
-
-  </section>
-
-  <!-- ════════════════════════════════
-       SCREEN: RESULTS
-  ════════════════════════════════ -->
-  <section class="screen" id="screenResults" role="region" aria-label="Scan results">
-
-    <header class="page-header">
-      <p class="page-header__eyebrow">
-        <span aria-hidden="true">✓</span> Scan Complete
-      </p>
-      <h2 class="page-header__title">Your Heart<br><em>Rhythm</em></h2>
-    </header>
-
-    <!-- BPM Hero -->
-    <div class="result-hero" aria-label="Heart rate result">
-      <div class="pulse-rings" aria-hidden="true">
-        <div class="pulse-ring"></div>
-        <div class="pulse-ring"></div>
-        <div class="pulse-ring"></div>
-        <div class="pulse-dot"></div>
-      </div>
-      <div class="result-bpm" id="resultBpm" aria-label="Heart rate in beats per minute">72</div>
-      <p class="result-bpm-label">Beats Per Minute</p>
-    </div>
-
-    <!-- Session name -->
-    <div class="session-name-field" role="group" aria-label="Name this session">
-      <span aria-hidden="true">✏️</span>
-      <input
-        type="text"
-        id="sessionNameInput"
-        class="session-name-field__input"
-        placeholder="Name this session (e.g. Morning Calm)"
-        maxlength="40"
-        autocomplete="off"
-        autocorrect="off"
-        spellcheck="false"
-        aria-label="Session name (optional)">
-    </div>
-
-    <!-- Music generating indicator (hidden by default) -->
-    <div class="music-generating" id="musicGenerating" hidden aria-live="polite" role="status">
-      <div class="gen-indicator" aria-hidden="true"></div>
-      🎵 Generating your heartbeat music…
-    </div>
-
-    <!-- Stress / wellness card -->
-    <div class="stress-card calm" id="stressCard" role="region" aria-label="Wellness assessment">
-      <div class="stress-card__top">
-        <span class="stress-badge calm" id="stressBadge" role="status">🟢 Calm</span>
-      </div>
-      <p class="stress-card__desc" id="stressDesc">
-        Your heart rate indicates a balanced and relaxed state.
-      </p>
-    </div>
-
-    <!-- Metrics -->
-    <div class="metrics-grid" role="group" aria-label="Heart metrics">
-      <div class="metric-tile">
-        <div class="metric-tile__value" id="metricHRV" aria-label="Heart rate variability">--</div>
-        <div class="metric-tile__label">HRV ms</div>
-      </div>
-      <div class="metric-tile">
-        <div class="metric-tile__value" id="metricMin" aria-label="Minimum BPM">--</div>
-        <div class="metric-tile__label">Min BPM</div>
-      </div>
-      <div class="metric-tile">
-        <div class="metric-tile__value" id="metricMax" aria-label="Maximum BPM">--</div>
-        <div class="metric-tile__label">Max BPM</div>
-      </div>
-    </div>
-
-    <!-- Music Player Card -->
-    <div class="card mb-3" role="region" aria-label="Heartbeat music player">
-      <div class="card__header">
-        <span aria-hidden="true">🎵</span>
-        <h3 class="card__title">Heartbeat Music</h3>
-        <span class="player-duration" id="musicDuration" aria-label="Music duration">60s</span>
-      </div>
-
-      <!-- Animated waveform -->
-      <canvas class="player-waveform" id="resultWaveform"
-        role="img" aria-label="Music waveform visualization" aria-hidden="true"></canvas>
-
-      <!-- Controls -->
-      <div class="player-controls">
-        <button
-          class="btn btn--primary btn--icon-only btn--play"
-          id="playBtn"
-          onclick="toggleMusic()"
-          aria-label="Play heartbeat music">▶</button>
-        <div class="player-meta">
-          <div class="player-title" id="musicTitle">Pulse Serenade in D</div>
-          <div class="player-subtitle" id="musicSubtitle">72 BPM · Melodic · Calm</div>
-        </div>
-      </div>
-
-      <!-- Playback progress -->
-      <div class="playback-bar" role="group" aria-label="Playback progress">
-        <div class="playback-track" role="progressbar"
-          aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-          <div class="playback-fill" id="playbackFill"></div>
-        </div>
-        <div class="playback-times" aria-hidden="true">
-          <span id="playbackElapsed">0:00</span>
-          <span id="playbackTotal">1:00</span>
-        </div>
-      </div>
-
-      <!-- Tempo control -->
-      <div class="tempo-control" role="group" aria-label="Adjust music tempo">
-        <label class="tempo-label" for="tempoSlider">Tempo</label>
-        <input
-          type="range"
-          id="tempoSlider"
-          min="40" max="180" value="72"
-          oninput="adjustTempo(this.value)"
-          aria-label="Adjust tempo in beats per minute"
-          aria-valuemin="40" aria-valuemax="180" aria-valuenow="72">
-        <span class="tempo-value" id="tempoVal" aria-live="polite">72</span>
-      </div>
-    </div>
-
-    <!-- Action buttons -->
-    <div class="btn-row btn-row--2 mb-3">
-      <button class="btn btn--primary"
-        onclick="saveSession()"
-        aria-label="Save this heartbeat session to your library"
-        style="font-size:12px;">
-        <span aria-hidden="true">💾</span> Save Session
-      </button>
-      <button class="btn btn--secondary"
-        onclick="startScan()"
-        aria-label="Start a new heartbeat scan"
-        style="font-size:12px;">
-        <span aria-hidden="true">🔄</span> Scan Again
-      </button>
-    </div>
-
-    <div class="gap-4"></div>
-
-  </section>
-
-  <!-- ════════════════════════════════
-       SCREEN: LIBRARY
-  ════════════════════════════════ -->
-  <section class="screen" id="screenLibrary" role="region" aria-label="Heartbeat session library">
-
-    <div class="library-header">
-      <h2 class="library-title">My<br><em>Library</em></h2>
-      <span class="library-count" id="libraryCount" aria-live="polite">0 sessions</span>
-    </div>
-
-    <!-- Empty state -->
-    <div id="libraryEmpty" class="empty-state" hidden>
-      <span class="empty-state__icon" aria-hidden="true">🫀</span>
-      <h3 class="empty-state__title">No Sessions Yet</h3>
-      <p class="empty-state__text">Complete a scan to save your first heartbeat recording to your library.</p>
-      <button class="btn btn--primary" onclick="startScan()"
-        aria-label="Start your first heartbeat scan">
-        Start Scanning
-      </button>
-    </div>
-
-    <!-- Session list -->
-    <div id="libraryList" role="list" aria-label="Saved heartbeat sessions"></div>
-
-    <div class="gap-4"></div>
-
-  </section>
-
-  <!-- ════════════════════════════════
-       SCREEN: ERROR
-  ════════════════════════════════ -->
-  <section class="screen" id="screenError" role="alert" aria-label="Error">
-
-    <div class="error-card">
-      <span class="error-card__icon" aria-hidden="true">🚫</span>
-      <h2 class="error-card__title" id="errorTitle">Camera Access Denied</h2>
-      <p class="error-card__text" id="errorMsg">
-        HeartBeat Studio needs camera access to detect your pulse.
-        Please allow camera permission in your browser settings and try again.
-      </p>
-    </div>
-
-    <button class="btn btn--primary"
-      onclick="showScreen('home')"
-      aria-label="Go back to home screen">
-      ← Back to Home
+  <!-- CTA -->
+  <div class="home-cta">
+    <button
+      class="btn btn--primary"
+      onclick="startScan()"
+      aria-label="Start a 30-second heartbeat scan">
+      <span aria-hidden="true">❤</span>
+      Begin Heart Scan
     </button>
+  </div>
 
-  </section>
+</main>
+
+
+<!-- ════════════════════════════════════════
+     SCAN SCREEN
+════════════════════════════════════════ -->
+<section
+  class="screen" id="scrScan"
+  role="region" aria-label="Heartbeat scanning"
+  aria-live="polite" aria-hidden="true">
+
+  <div class="scan-top">
+    <p class="scan-eyebrow" aria-hidden="true">
+      <span class="dot-live"></span>
+      Scanning
+    </p>
+    <h2 class="scan-title">Detecting Your Pulse</h2>
+  </div>
+
+  <!-- Camera ring -->
+  <div class="cam-ring" role="img" aria-label="Camera preview — cover lens with fingertip">
+    <video
+      id="camVid"
+      class="cam-video"
+      autoplay playsinline muted
+      aria-hidden="true"></video>
+    <div class="cam-border" aria-hidden="true"></div>
+    <div class="cam-spin"   aria-hidden="true"></div>
+  </div>
+
+  <!-- Signal feedback -->
+  <div class="signal-strip" id="signalStrip"
+    role="status" aria-live="polite"
+    aria-label="Cover the rear camera lens with your fingertip and hold still.">
+    <span class="strip-icon" id="stripIcon" aria-hidden="true">👆</span>
+    <span id="stripText">Cover the rear camera lens with your fingertip and hold still.</span>
+  </div>
+
+  <!-- Signal bars -->
+  <div class="sig-row" role="group" aria-label="Signal strength indicator">
+    <span class="sig-label" aria-hidden="true">Signal</span>
+    <div class="sig-bars" aria-hidden="true">
+      <div class="sig-bar" id="sb1"></div>
+      <div class="sig-bar" id="sb2"></div>
+      <div class="sig-bar" id="sb3"></div>
+      <div class="sig-bar" id="sb4"></div>
+      <div class="sig-bar" id="sb5"></div>
+    </div>
+    <span class="sig-text" id="sigTxt" aria-hidden="true">—</span>
+  </div>
+
+  <!-- Live BPM -->
+  <div class="bpm-row" role="group">
+    <div class="bpm-num" id="liveBpm"
+      aria-label="Current detected heart rate">--</div>
+    <div class="bpm-meta">
+      <span class="bpm-unit" aria-hidden="true">BPM</span>
+      <span class="bpm-pill" id="bpmPill">Calibrating</span>
+    </div>
+  </div>
+
+  <!-- Waveform -->
+  <canvas class="wave-canvas" id="waveCanvas"
+    role="img" aria-label="Live heartbeat waveform"></canvas>
+
+  <!-- Progress -->
+  <div class="scan-progress" role="group" aria-label="Scan duration progress">
+    <div class="scan-progress__row">
+      <span>Scanning your heartbeat…</span>
+      <span id="scanTimeLeft" aria-live="polite" aria-atomic="true">30s remaining</span>
+    </div>
+    <div class="prog-track"
+      role="progressbar"
+      id="progressBar"
+      aria-valuemin="0" aria-valuemax="30" aria-valuenow="0"
+      aria-label="Scan progress">
+      <div class="prog-fill" id="progFill"></div>
+    </div>
+  </div>
+
+  <div class="mt-auto" style="padding-top:16px">
+    <button
+      class="btn btn--outline"
+      onclick="cancelScan()"
+      aria-label="Cancel scan and return to home screen">
+      Cancel Scan
+    </button>
+  </div>
+
+  <!-- Screen reader live regions -->
+  <div class="sr-only" aria-live="polite" aria-atomic="true" id="bpmLive"></div>
+  <div class="sr-only" aria-live="polite" aria-atomic="true" id="sigLive"></div>
+
+</section>
+
+
+<!-- ════════════════════════════════════════
+     RESULTS SCREEN
+════════════════════════════════════════ -->
+<section
+  class="screen" id="scrResults"
+  role="region" aria-label="Scan results"
+  aria-hidden="true">
+
+  <div class="results-top">
+    <p class="results-eyebrow">
+      <span aria-hidden="true">✓</span>
+      Scan Complete
+    </p>
+    <h2 class="results-title">Your Heart<br>Rhythm</h2>
+  </div>
+
+  <!-- BPM hero -->
+  <div class="bpm-hero" aria-label="Heart rate result">
+    <div class="pulse-rings" aria-hidden="true">
+      <div class="pulse-r"></div>
+      <div class="pulse-r"></div>
+      <div class="pulse-r"></div>
+      <div class="pulse-core"></div>
+    </div>
+    <div class="res-bpm" id="resBpm" aria-label="Heart rate in beats per minute">72</div>
+    <p class="res-bpm-sub">Beats Per Minute</p>
+  </div>
+
+  <!-- Session name -->
+  <div class="name-row" role="group" aria-label="Name this heartbeat session">
+    <span aria-hidden="true">✏</span>
+    <input
+      type="text"
+      id="sessNameInput"
+      class="name-input"
+      placeholder="Name this session (e.g. Morning Calm)"
+      maxlength="40"
+      autocomplete="off" autocorrect="off" spellcheck="false"
+      aria-label="Session name — optional">
+  </div>
+
+  <!-- Generating music banner (hidden until finalize) -->
+  <div class="gen-banner" id="genBanner" hidden
+    role="status" aria-live="polite">
+    <div class="gen-dot" aria-hidden="true"></div>
+    Generating your heartbeat music…
+  </div>
+
+  <!-- Wellness card -->
+  <div class="wellness calm" id="wellCard"
+    role="region" aria-label="Wellness assessment">
+    <span class="wellness-badge calm" id="wellBadge" role="status">● Calm</span>
+    <p class="wellness-desc" id="wellDesc">
+      Your heart rate indicates a balanced and relaxed state.
+    </p>
+  </div>
+
+  <!-- Metrics -->
+  <div class="metrics-3" role="group" aria-label="Heart metrics">
+    <div class="metric-tile">
+      <div class="metric-tile__val" id="metHRV"
+        aria-label="Heart rate variability in milliseconds">--</div>
+      <div class="metric-tile__lbl">HRV ms</div>
+    </div>
+    <div class="metric-tile">
+      <div class="metric-tile__val" id="metMin"
+        aria-label="Minimum beats per minute">--</div>
+      <div class="metric-tile__lbl">Min BPM</div>
+    </div>
+    <div class="metric-tile">
+      <div class="metric-tile__val" id="metMax"
+        aria-label="Maximum beats per minute">--</div>
+      <div class="metric-tile__lbl">Max BPM</div>
+    </div>
+  </div>
+
+  <!-- Music player card -->
+  <div class="card" role="region" aria-label="Heartbeat music player"
+    style="margin-bottom:12px">
+    <div class="card__head">
+      <span class="card__icon" aria-hidden="true">♪</span>
+      <h3 class="card__title">Heartbeat Music</h3>
+      <span class="card__badge player-dur" id="mxDur"
+        aria-label="Music duration">60s</span>
+    </div>
+
+    <!-- Animated waveform bars -->
+    <canvas class="player-wv" id="playerWave"
+      role="img" aria-label="Music waveform visualization"
+      aria-hidden="true"></canvas>
+
+    <!-- Controls row -->
+    <div class="player-ctrl">
+      <button
+        class="btn btn--primary btn--icon"
+        id="playBtn"
+        onclick="toggleMusic()"
+        aria-label="Play heartbeat music">▶</button>
+      <div class="player-info">
+        <div class="player-title" id="mxTitle">Pulse Serenade in D</div>
+        <div class="player-sub"   id="mxSub">72 BPM · Melodic · Calm</div>
+      </div>
+    </div>
+
+    <!-- Playback progress -->
+    <div class="pb-bar" role="group" aria-label="Playback progress">
+      <div class="pb-track"
+        role="progressbar"
+        aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
+        aria-label="Music playback position">
+        <div class="pb-fill" id="pbFill"></div>
+      </div>
+      <div class="pb-times" aria-hidden="true">
+        <span id="pbElapsed">0:00</span>
+        <span id="pbTotal">1:00</span>
+      </div>
+    </div>
+
+    <!-- Tempo slider -->
+    <div class="tempo-ctrl" role="group" aria-label="Music tempo control">
+      <label class="tempo-lbl" for="tempoSlider">Tempo</label>
+      <input
+        type="range"
+        id="tempoSlider"
+        min="40" max="180" value="72"
+        oninput="adjustTempo(this.value)"
+        aria-label="Adjust music tempo"
+        aria-valuemin="40" aria-valuemax="180" aria-valuenow="72">
+      <span class="tempo-val" id="tempoVal" aria-live="polite">72</span>
+    </div>
+  </div>
+
+  <!-- Action buttons -->
+  <div class="btn-2up" style="margin-bottom:12px">
+    <button
+      class="btn btn--primary"
+      onclick="saveSession()"
+      aria-label="Save this heartbeat session to your library">
+      <span aria-hidden="true">↓</span> Save
+    </button>
+    <button
+      class="btn btn--outline"
+      onclick="startScan()"
+      aria-label="Start a new heartbeat scan">
+      <span aria-hidden="true">↺</span> Rescan
+    </button>
+  </div>
+
+  <div style="height:8px"></div>
+
+</section>
+
+
+<!-- ════════════════════════════════════════
+     LIBRARY SCREEN
+════════════════════════════════════════ -->
+<section
+  class="screen" id="scrLibrary"
+  role="region" aria-label="Session library"
+  aria-hidden="true">
+
+  <div class="lib-head">
+    <h2 class="lib-title">My<br><em>Library</em></h2>
+    <span class="lib-count" id="libCount" aria-live="polite">0 sessions</span>
+  </div>
+
+  <!-- Empty state -->
+  <div id="libEmpty" class="empty-state" hidden>
+    <span class="empty-state__icon" aria-hidden="true">🫀</span>
+    <h3 class="empty-state__title">No Sessions Yet</h3>
+    <p class="empty-state__text">
+      Complete a scan to save your first heartbeat session and build your personal library.
+    </p>
+    <button
+      class="btn btn--primary"
+      onclick="startScan()"
+      aria-label="Start your first heartbeat scan">
+      Start Scanning
+    </button>
+  </div>
+
+  <!-- Sessions list -->
+  <div id="libList" role="list" aria-label="Saved heartbeat sessions"></div>
+
+  <div style="height:12px"></div>
+
+</section>
+
+
+<!-- ════════════════════════════════════════
+     ERROR SCREEN
+════════════════════════════════════════ -->
+<section
+  class="screen" id="scrError"
+  role="alert" aria-label="Error"
+  aria-hidden="true">
+
+  <div class="err-box">
+    <span class="err-icon" aria-hidden="true">⊘</span>
+    <h2 class="err-title" id="errTitle">Camera Access Denied</h2>
+    <p class="err-text" id="errMsg">
+      HeartBeat Studio needs camera access to detect your pulse.
+      Please allow camera permission in your browser settings, then try again.
+    </p>
+  </div>
+
+  <button
+    class="btn btn--primary"
+    onclick="showScreen('home')"
+    aria-label="Return to home screen">
+    ← Back to Home
+  </button>
+
+</section>
+
 
 </div><!-- end .app -->
 
-<!-- ════════════════════════════════
-     BOTTOM NAVIGATION
-════════════════════════════════ -->
-<nav class="nav-bar" id="navBar" role="navigation" aria-label="Main navigation">
-  <button class="nav-tab active"
+
+<!-- ════════════════════════════════════════
+     BOTTOM NAV
+════════════════════════════════════════ -->
+<nav class="nav" id="mainNav" role="navigation" aria-label="Main navigation">
+
+  <button
+    class="nav__tab active"
     id="navHome"
-    data-screen="screenHome"
+    data-screen="scrHome"
     onclick="showScreen('home')"
     aria-label="Home"
     aria-current="page">
-    <span class="nav-icon" aria-hidden="true">🏠</span>
+    <span class="nav__icon" aria-hidden="true">⌂</span>
     Home
   </button>
-  <button class="nav-tab"
+
+  <button
+    class="nav__tab nav__tab--scan"
     id="navScan"
-    data-screen="screenScan"
+    data-screen="scrScan"
     onclick="startScan()"
-    aria-label="Start a new scan">
-    <span class="nav-icon" aria-hidden="true">❤️</span>
+    aria-label="Start a new heartbeat scan">
+    <span class="nav__icon" aria-hidden="true">❤</span>
     Scan
   </button>
-  <button class="nav-tab"
-    id="navLibrary"
-    data-screen="screenLibrary"
+
+  <button
+    class="nav__tab"
+    id="navLib"
+    data-screen="scrLibrary"
     onclick="showScreen('library')"
     aria-label="View your session library">
-    <span class="nav-icon" aria-hidden="true">📚</span>
+    <span class="nav__icon" aria-hidden="true">♫</span>
     Library
-    <span class="nav-tab__badge" id="libBadge" hidden aria-label="sessions saved"></span>
+    <span
+      class="nav__badge" id="libBadge"
+      hidden aria-label="saved sessions"></span>
   </button>
+
 </nav>
 
-<!-- ════════════════════════════════
-     CONFIRM DIALOG
-════════════════════════════════ -->
-<div class="overlay" id="confirmOverlay" hidden
-  aria-hidden="true" role="dialog"
-  aria-modal="true" aria-labelledby="dialogTitle" aria-describedby="dialogDesc">
-  <div class="dialog">
-    <h3 class="dialog__title" id="dialogTitle">Delete Session?</h3>
-    <p class="dialog__text" id="dialogDesc">
-      This heartbeat session will be permanently removed from your library.
-    </p>
-    <div class="dialog__actions">
-      <button class="btn btn--secondary" style="flex:1"
-        onclick="closeDialog()"
-        aria-label="Cancel, keep the session">
-        Cancel
-      </button>
-      <button class="btn btn--primary" id="dialogConfirmBtn"
-        onclick="executeDelete()"
-        style="flex:1; font-size:13px;"
-        aria-label="Confirm delete session">
-        Delete
-      </button>
-    </div>
-  </div>
-</div>
 
-<!-- Toast notification -->
-<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<!-- Scripts (order matters) -->
+
+<!-- Toast -->
+<div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+
+
+<!-- Scripts — load order matters -->
 <script src="./storage.js"></script>
 <script src="./audioEngine.js"></script>
 <script src="./app.js"></script>
