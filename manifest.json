@@ -1,17 +1,17 @@
 {
   "name": "HeartBeat Studio",
   "short_name": "HB Studio",
-  "description": "Detect your pulse with your phone camera and transform your heartbeat into personalized music.",
-  "start_url": "./index.html?source=pwa",
+  "description": "Detect your pulse with your camera and transform your heartbeat into music.",
+  "start_url": "./index.html?utm_source=pwa",
   "display": "standalone",
-  "display_override": ["standalone","minimal-ui"],
+  "display_override": ["standalone", "minimal-ui"],
   "orientation": "portrait-primary",
   "background_color": "#060810",
   "theme_color": "#060810",
   "icons": [
-    {"src":"icons/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
-    {"src":"icons/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ],
-  "categories": ["health","music","lifestyle"],
+  "categories": ["health", "music", "lifestyle"],
   "prefer_related_applications": false
 }
