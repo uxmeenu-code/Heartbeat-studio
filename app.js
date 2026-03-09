@@ -612,7 +612,8 @@ function adjustVolume(val) {
 /* ── SAVE SESSION ──────────────────────────────────────────── */
 async function saveSession() {
   const name=$id('sessNameInput')?.value?.trim()||'';
-  const sess=Storage.buildSession({bpm:S.bpm,hrv:S.hrv,minBpm:S.minBpm,maxBpm:S.maxBpm,mood:S.mood,tempo:S.musicBpm||S.bpm,name});
+  const musicSeed=AudioEngine.getSessionSeed();
+  const sess=Storage.buildSession({bpm:S.bpm,hrv:S.hrv,minBpm:S.minBpm,maxBpm:S.maxBpm,mood:S.mood,tempo:S.musicBpm||S.bpm,name,musicSeed});
   try{
     await Storage.saveSession(sess);
     toast('Session saved ✓','success'); _updateBadge(); renderLibrary();
@@ -694,7 +695,7 @@ async function playLib(id) {
   S.libPlayingId=id;
   try { await AudioEngine.resume(); } catch {}
   AudioEngine.setVolume(Storage.getVolume());
-  const ok=await AudioEngine.start(sess.bpm,sess.hrv,()=>{
+  const ok=await AudioEngine.start(sess.bpm,sess.hrv,sess.musicSeed||0,()=>{
     if(btn){btn.textContent='▶';btn.classList.remove('playing');}
     AudioEngine.setBeatCallback(null); S.libPlayingId=null;
   });
@@ -786,6 +787,31 @@ async function _refreshProfileUI() {
   const ss=$id('profStatSessions'); if(ss) ss.textContent=count;
   const sb=$id('profStatAvgBpm');   if(sb) sb.textContent=avgBpm||'--';
   const st=$id('profStatStreak');   if(st) st.textContent=streak;
+
+  /* ── Stress Index ── */
+  /* Computed from avg HRV and avg BPM across all sessions.
+     Lower HRV + higher BPM → higher stress. Range 0-100. */
+  const stressBadge=$id('stressBadge'), stressBarFill=$id('stressBarFill'), stressDesc=$id('stressDesc');
+  if (count > 0 && stressBadge) {
+    const avgHrv = sessions.reduce((a,s)=>a+(s.hrv||45),0)/count;
+    const avgBpm = sessions.reduce((a,s)=>a+(s.bpm||72),0)/count;
+    /* Normalize: HRV 10-90ms (inverted), BPM 50-120 */
+    const hrvScore = Math.max(0,Math.min(100, (1-(avgHrv-10)/80)*100 ));
+    const bpmScore = Math.max(0,Math.min(100, ((avgBpm-50)/70)*100 ));
+    const stressIdx = Math.round(hrvScore*0.65 + bpmScore*0.35);
+    const si = Math.max(0,Math.min(100,stressIdx));
+    stressBadge.textContent = si < 30 ? `${si} — Low` : si < 60 ? `${si} — Moderate` : `${si} — High`;
+    stressBadge.className = 'stress-badge ' + (si < 30 ? 'low' : si < 60 ? 'moderate' : 'high');
+    if(stressBarFill) stressBarFill.style.width = si+'%';
+    if(stressDesc){
+      if(si < 30) stressDesc.textContent = 'Your HRV and heart rate suggest a relaxed, well-recovered state.';
+      else if(si < 60) stressDesc.textContent = 'Moderate stress detected. Your body is in an alert but balanced state.';
+      else stressDesc.textContent = 'Elevated stress markers. Try slow breathing or a meditation session.';
+    }
+  } else if (stressBadge) {
+    stressBadge.textContent = '—';
+    if(stressDesc) stressDesc.textContent = 'Complete a scan to see your stress index.';
+  }
 
   /* Subscription state */
   const sub=Storage.isSubscribed();

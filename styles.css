@@ -1306,3 +1306,87 @@ input[type=range]::-moz-range-thumb {
   gap: var(--s3); margin-bottom: var(--s4);
 }
 .prof-edit-actions .btn { font-size: 12px; min-height: 50px; letter-spacing: .05em; }
+
+
+/* ═══════════════════════════════════════════════════════════
+   v6.1 — STRESS INDEX CARD
+═══════════════════════════════════════════════════════════ */
+.stress-card {
+  background: var(--surf); border: 1px solid var(--bdr);
+  border-radius: var(--r5); padding: var(--s5);
+  margin-bottom: var(--s4);
+}
+.stress-header {
+  display: flex; align-items: center;
+  justify-content: space-between; margin-bottom: var(--s3);
+}
+.stress-title {
+  font-size: var(--ts-xs); font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--tx2);
+}
+.stress-badge {
+  font-size: var(--ts-xs); font-weight: 800;
+  padding: 3px 10px; border-radius: var(--r4);
+  background: var(--surf2); color: var(--tx2);
+  letter-spacing: .04em;
+}
+.stress-badge.low      { background: rgba(0,212,170,.15); color: var(--teal); }
+.stress-badge.moderate { background: rgba(232,163,71,.15); color: var(--amber); }
+.stress-badge.high     { background: rgba(232,51,74,.15);  color: var(--red); }
+.stress-bar-wrap { margin-bottom: var(--s2); }
+.stress-bar-track {
+  height: 7px; border-radius: 999px;
+  background: linear-gradient(to right, var(--teal), var(--amber), var(--red));
+  position: relative; overflow: hidden; margin-bottom: 4px;
+}
+.stress-bar-fill {
+  position: absolute; inset: 0; right: auto;
+  /* The fill is actually a "mask" overlay from right that covers the bar */
+  /* Use a different approach: just show a marker */
+  height: 100%; background: transparent;
+  border-right: 3px solid white; border-radius: 0 2px 2px 0;
+  transition: width 0.8s cubic-bezier(.4,0,.2,1);
+  box-shadow: 0 0 6px rgba(255,255,255,.7);
+}
+.stress-scale {
+  display: flex; justify-content: space-between;
+  font-size: 10px; color: var(--tx3); letter-spacing: .04em;
+}
+.stress-desc {
+  font-size: var(--ts-xs); color: var(--tx3); line-height: 1.55; margin: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   v6.1 — ABOUT CARD
+═══════════════════════════════════════════════════════════ */
+.about-card {
+  background: var(--surf); border: 1px solid var(--bdr);
+  border-radius: var(--r5); padding: var(--s6);
+  margin-bottom: var(--s4); text-align: center;
+}
+.about-logo { font-size: 36px; margin-bottom: var(--s2); line-height: 1; }
+.about-name {
+  font-size: var(--ts-lg); font-weight: 900;
+  letter-spacing: -.025em; color: var(--tx); margin: 0 0 4px;
+}
+.about-version {
+  font-size: var(--ts-xs); color: var(--tx3); letter-spacing: .06em;
+  text-transform: uppercase; margin: 0 0 var(--s4);
+}
+.about-desc {
+  font-size: var(--ts-xs); color: var(--tx2); line-height: 1.7;
+  text-align: left; margin-bottom: var(--s4);
+}
+.about-features {
+  display: flex; flex-direction: column; gap: var(--s2);
+  margin-bottom: var(--s4); text-align: left;
+}
+.about-feat {
+  display: flex; align-items: flex-start; gap: var(--s2);
+  font-size: var(--ts-xs); color: var(--tx2); line-height: 1.5;
+}
+.about-feat span { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+.about-disclaimer {
+  font-size: 10px; color: var(--tx3); letter-spacing: .04em;
+  font-style: italic; margin: 0;
+}

@@ -79,14 +79,14 @@ const Storage = (() => {
     throw new Error('Not found');
   }
 
-  function buildSession({ bpm, hrv, minBpm, maxBpm, mood, tempo, name }) {
+  function buildSession({ bpm, hrv, minBpm, maxBpm, mood, tempo, name, musicSeed }) {
     const now  = new Date();
     const id   = now.getTime();
     const date = now.toLocaleDateString('en-CA');
     const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const finalName = (name || '').trim() ||
       `Session · ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${time}`;
-    return { id, name: finalName, bpm, hrv, minBpm, maxBpm, mood, tempo, date, time };
+    return { id, name: finalName, bpm, hrv, minBpm, maxBpm, mood, tempo, date, time, musicSeed: musicSeed||0 };
   }
 
   /* ─── Profile ─── */
