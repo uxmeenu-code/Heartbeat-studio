@@ -630,6 +630,8 @@ input[type=range]::-moz-range-thumb {
   text-align:center; padding:var(--s12) var(--s6) var(--s8);
   gap:var(--s3); flex:1;
 }
+/* hidden attribute must beat display:flex */
+[hidden] { display:none !important; }
 .empty-icon { font-size:54px; opacity:.22; }
 .empty-title { font-size:var(--ts-lg); font-weight:800; letter-spacing:-.02em; }
 .empty-desc { font-size:var(--ts-sm); color:var(--tx3); line-height:1.65; max-width:260px; }
@@ -1190,3 +1192,117 @@ input[type=range]::-moz-range-thumb {
   transition: opacity var(--fast);
 }
 .sess-save-btn:active { opacity: .8; }
+
+
+/* ═══════════════════════════════════════════════════════════
+   v5.1 — PLAY BUTTON GENERATING STATE
+═══════════════════════════════════════════════════════════ */
+
+/* Disabled / generating state — spinner replaces ▶ icon */
+.btn-ico.generating {
+  pointer-events: none;
+  opacity: 0.7;
+  position: relative;
+  color: transparent !important;   /* hide the ▶ character */
+}
+
+/* CSS spinner overlaid inside the button */
+.btn-ico.generating::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 20px;
+  height: 20px;
+  border: 2.5px solid rgba(255,255,255,0.25);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: btnSpin 0.75s linear infinite;
+}
+
+@keyframes btnSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* Also disable the onclick while generating */
+.btn-ico[disabled] {
+  pointer-events: none;
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   v5.2 — INSTRUMENT ZONE LABEL
+═══════════════════════════════════════════════════════════ */
+.instr-label {
+  display: flex; align-items: center; gap: var(--s2);
+  background: var(--surf); border: 1px solid var(--bdr2);
+  border-radius: var(--rf); padding: 5px 13px;
+  font-size: var(--ts-xs); color: var(--teal); font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase;
+  margin-bottom: var(--s3);
+  animation: slideUp var(--std) var(--ease);
+}
+.instr-icon { font-size: 13px; }
+
+
+/* ═══════════════════════════════════════════════════════════
+   v5.2 — PROFILE VIEW/EDIT MODE
+═══════════════════════════════════════════════════════════ */
+
+/* Header row with Edit button */
+.prof-hd-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding: var(--s6) 0 var(--s5);
+  flex-shrink: 0;
+}
+.prof-edit-btn {
+  background: var(--surf); border: 1px solid var(--bdr2);
+  border-radius: var(--r4); color: var(--tx2);
+  font-family: var(--font); font-size: var(--ts-xs);
+  font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  padding: var(--s2) var(--s4); cursor: pointer;
+  transition: border-color var(--fast), color var(--fast);
+  white-space: nowrap; height: 36px;
+  display: flex; align-items: center; gap: var(--s2);
+}
+.prof-edit-btn:hover { border-color: var(--red); color: var(--red); }
+
+/* Info card (view mode) */
+.prof-info-card {
+  background: var(--surf); border: 1px solid var(--bdr);
+  border-radius: var(--r5); padding: var(--s5);
+  margin-bottom: var(--s4);
+}
+.prof-info-empty {
+  display: flex; flex-direction: column; align-items: center;
+  gap: var(--s3); text-align: center; padding: var(--s4) 0;
+}
+.prof-info-empty-icon { font-size: 36px; opacity: .3; }
+.prof-info-empty p { font-size: var(--ts-sm); color: var(--tx3); }
+
+/* Info rows (view mode) */
+.prof-info-rows { display: flex; flex-direction: column; gap: 0; }
+.prof-info-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--bdr);
+}
+.prof-info-row:last-child { border-bottom: none; }
+.prof-info-lbl {
+  font-size: var(--ts-xs); font-weight: 600;
+  letter-spacing: .07em; text-transform: uppercase; color: var(--tx3);
+  min-width: 70px;
+}
+.prof-info-val {
+  font-size: var(--ts-sm); font-weight: 600; color: var(--tx);
+  text-align: right; flex: 1;
+}
+
+/* Edit mode action buttons */
+.prof-edit-actions {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: var(--s3); margin-bottom: var(--s4);
+}
+.prof-edit-actions .btn { font-size: 12px; min-height: 50px; letter-spacing: .05em; }
