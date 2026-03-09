@@ -1,0 +1,14 @@
+# GitHub Pages — HeartBeat Studio
+# Disable Jekyll processing so .js files are served as-is
+plugins: []
+
+# Tell GitHub Pages not to process these as Jekyll/Liquid templates
+include:
+  - _headers
+
+# Exclude dev files from the build
+exclude:
+  - "*.bak"
+  - "*.bak.js"
+  - jsconfig.json
+  - "app.js.bak2"
