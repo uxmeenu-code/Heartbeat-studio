@@ -535,11 +535,12 @@ nav.main-nav {
 }
 @keyframes corePulse{0%,100%{transform:scale(1)}50%{transform:scale(1.35)}}
 .res-bpm {
-  font-size:var(--ts-hero); font-weight:800;
+  font-size:clamp(56px, 20vw, 96px); font-weight:800;
   letter-spacing:-.055em; line-height:1;
   background:linear-gradient(155deg,#fff 15%,var(--red) 85%);
   -webkit-background-clip:text; -webkit-text-fill-color:transparent;
   background-clip:text;
+  overflow:visible; white-space:nowrap;
 }
 .res-bpm-lbl {
   font-size:var(--ts-xs); letter-spacing:.22em;
@@ -617,8 +618,9 @@ nav.main-nav {
 
 /* Player */
 .player-wave {
-  width:100%; height:48px; display:block;
+  width:100%; height:64px; display:block;
   border-radius:var(--r2); margin-bottom:var(--s3);
+  overflow:hidden; flex-shrink:0;
 }
 .player-row {
   display:flex; align-items:center; gap:var(--s3); margin-bottom:var(--s3);
@@ -2542,275 +2544,518 @@ window.AudioEngine = AudioEngine;
    - Each genre has unique sound design, not just different scales
 ═══════════════════════════════════════════════════ */
 const GenreEngine = (() => {
+/*
+  GenreEngine v17 — Rhythmic, Harmonic, Continuous Music
+  
+  ROOT CAUSES of previous problems:
+  1. NO CONTINUITY: _nextNote() called _rand() independently each time →
+     random pitch jumps with no melodic logic. Fixed with stepwise motion.
+  2. EDM NOT RHYTHMIC: 4 arpeggio calls each picked random notes →
+     no repeating pattern. Fixed with a locked 16-step sequencer grid.
+  3. IBI timing broke the beat grid: using heartbeat interval variance
+     for beat timing made all percussion sound drunk. Fixed: use locked
+     BPM grid for ALL rhythmic elements. IBI only shapes melody character.
 
+  ARCHITECTURE:
+  - Each genre has a 16-step SEQUENCER (kick/snare/hat on/off pattern)
+  - Melody uses STEPWISE MOTION: next note = current ± 1 scale step
+  - Chord progressions change every 4 bars (16 beats)
+  - Melody respects the current chord → harmonious sound
+  - All timing is strict BPM grid — no IBI wobble on drums
+  - IBI data only used for: seed uniqueness + melody velocity shaping
+*/
+
+  /* ─────────────────────────────────────────────────────────────
+     SCALES — diatonic, all rooted at C (262Hz) for consistency
+     Using relative intervals so chord function is clear
+  ───────────────────────────────────────────────────────────── */
+  const NOTE = {
+    /* One octave of C major at 4th octave */
+    C4:261.63, D4:293.66, E4:329.63, F4:349.23,
+    G4:392.00, A4:440.00, B4:493.88, C5:523.25,
+    D5:587.33, E5:659.25, F5:698.46, G5:783.99,
+    A5:880.00, B5:987.77, C6:1046.50,
+    /* Bass register */
+    C2:65.41,  D2:73.42,  E2:82.41,  F2:87.31,
+    G2:98.00,  A2:110.00, B2:123.47,
+    C3:130.81, D3:146.83, E3:164.81, F3:174.61,
+    G3:196.00, A3:220.00, B3:246.94,
+    /* Minor scale */
+    Eb4:311.13, Bb3:233.08, Ab3:207.65, Gb3:185.00,
+    Eb3:155.56, Bb2:116.54, Ab2:103.83,
+    /* Hip-hop / EDM sub frequencies */
+    C1:32.70, G1:49.00, A1:55.00, Bb1:58.27,
+  };
+
+  /* ─────────────────────────────────────────────────────────────
+     GENRE DEFINITIONS
+     Each genre has:
+       scale[]     — melody note pool (ordered low→high)
+       bass[]      — bass note pool
+       chordProg[] — 4-chord progression (indices into scale)
+       seq16[]     — 16-step kick/snare/hat pattern arrays
+       melodyRhythm[] — 16 booleans: which steps have a melody note
+  ───────────────────────────────────────────────────────────── */
   const GENRES = {
-    meghMalhar:{ label:'Megh Malhar', emoji:'☁️' },
-    pop:       { label:'Pop',         emoji:'🎤' },
-    hiphop:    { label:'Hip-Hop',     emoji:'🎧' },
-    edm:       { label:'Electronic',  emoji:'⚡' },
-    rock:      { label:'Rock',        emoji:'🎸' },
-    latin:     { label:'Latin',       emoji:'🪘' },
+
+    pop: {
+      label:'Pop', emoji:'🎤',
+      /* C major: bright, singable */
+      scale: [NOTE.C4, NOTE.E4, NOTE.G4, NOTE.A4, NOTE.C5, NOTE.E5, NOTE.G5, NOTE.A5],
+      bass:  [NOTE.C3, NOTE.A2, NOTE.F3, NOTE.G3],
+      /* I–vi–IV–V */
+      chordProg: [
+        [0,2,4], /* C major: C E G */
+        [5,0,2], /* Am:      A C E */
+        [3,5,0], /* F major: F A C */
+        [4,0,2], /* G major: G B D → approx G A C */
+      ],
+      /* kick on 1,3 | snare on 2,4 | hats on every 8th */
+      seqK:  [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0],
+      seqS:  [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
+      seqH:  [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
+      seqOH: [0,0,0,0, 0,0,0,1, 0,0,0,0, 0,0,0,1],
+      /* melody on beats 1,2,3,4 (every 4th step) + syncopation */
+      melRhythm: [1,0,0,1, 1,0,1,0, 1,0,0,1, 1,0,1,0],
+    },
+
+    hiphop: {
+      label:'Hip-Hop', emoji:'🎧',
+      /* A minor pentatonic — classic hip-hop */
+      scale: [NOTE.A3, NOTE.C4, NOTE.D4, NOTE.E4, NOTE.G4, NOTE.A4, NOTE.C5, NOTE.D5],
+      bass:  [NOTE.A2, NOTE.A2, NOTE.C3, NOTE.G2],
+      chordProg: [
+        [0,2,4], /* Am pent */
+        [0,2,4],
+        [2,4,6], /* Cm pent */
+        [4,6,0], /* Em pent */
+      ],
+      /* Trap: kick on 1, skip 2, kick 2.5, skip 3, snare 3, etc. */
+      seqK:  [1,0,0,1, 0,0,1,0, 1,0,0,1, 0,0,1,0],
+      seqS:  [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
+      seqH:  [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1], /* 16th hi-hats */
+      seqOH: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],
+      melRhythm: [1,0,0,0, 1,0,0,0, 0,1,0,0, 1,0,0,0],
+    },
+
+    edm: {
+      label:'Electronic / EDM', emoji:'⚡',
+      /* D minor — dark, driving */
+      scale: [NOTE.D4, NOTE.E4, NOTE.F4, NOTE.G4, NOTE.A4, NOTE.Bb3*2, NOTE.C5, NOTE.D5],
+      bass:  [NOTE.D3, NOTE.A2, NOTE.Bb2*1, NOTE.C3],
+      chordProg: [
+        [0,2,4], /* Dm */
+        [4,6,1], /* Am */
+        [5,0,2], /* Bb */
+        [6,1,3], /* C  */
+      ],
+      /* 4-on-floor kick, clap on 2+4, open hi-hat off-beat */
+      seqK:  [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0],
+      seqS:  [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
+      seqH:  [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0], /* off-beat hats */
+      seqOH: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],
+      /* FIXED arpeggio: same 4-note pattern every beat, repeating */
+      /* arpPat defined separately below */
+      arpPat: [0,2,4,6, 0,2,4,6, 1,3,5,0, 1,3,5,0], /* 16-step arp */
+      melRhythm: [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1], /* every 16th */
+    },
+
+    rock: {
+      label:'Rock', emoji:'🎸',
+      /* E minor / E major power chord roots */
+      scale: [NOTE.E4, NOTE.G4, NOTE.A4, NOTE.B4, NOTE.D5, NOTE.E5, NOTE.G5, NOTE.B5],
+      bass:  [NOTE.E2, NOTE.A2, NOTE.D3, NOTE.E2],
+      chordProg: [
+        [0,2,4], /* Em */
+        [2,4,6], /* Am */
+        [1,3,5], /* G  */
+        [0,2,4], /* Em */
+      ],
+      seqK:  [1,0,0,0, 0,0,1,0, 1,0,0,0, 0,0,1,0],
+      seqS:  [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
+      seqH:  [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
+      seqOH: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,1],
+      melRhythm: [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0],
+    },
+
+    latin: {
+      label:'Latin', emoji:'🪘',
+      /* A major — bright, warm */
+      scale: [NOTE.A3, NOTE.B3, NOTE.Eb4, NOTE.E4, NOTE.Gb3*2, NOTE.A4, NOTE.B4, NOTE.E5],
+      bass:  [NOTE.A2, NOTE.E3, NOTE.D3, NOTE.E3],
+      chordProg: [
+        [0,2,4], /* A major */
+        [4,6,1], /* E major */
+        [2,4,6], /* C#m     */
+        [3,5,0], /* D major */
+      ],
+      /* 3-2 clave pattern on the 16-step grid */
+      seqK:  [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0],
+      seqS:  [0,0,0,0, 0,0,1,0, 0,0,0,0, 1,0,0,0],
+      seqH:  [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
+      seqOH: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],
+      /* 3-2 clave: hits on steps 0,3,6,10,12 of 16 */
+      clave: [1,0,0,1, 0,0,1,0, 0,0,1,0, 1,0,0,0],
+      melRhythm: [1,0,0,1, 0,0,1,0, 1,0,0,1, 0,1,0,0],
+    },
   };
 
-  /* Scales chosen by pulse character (not arbitrary) */
-  /* Pop: bright C major / Hip-Hop: A minor pent low / EDM: Dm7 / Rock: power roots / Latin: A major */
-  const SCALES = {
-    pop:    [523.25, 587.33, 659.25, 698.46, 783.99, 880.00, 987.77, 1046.50],
-    hiphop: [130.81, 155.56, 174.61, 195.99, 220.00, 261.63, 311.13, 349.23],
-    edm:    [261.63, 311.13, 349.23, 392.00, 466.16, 523.25, 622.25, 698.46],
-    rock:   [110.00, 123.47, 130.81, 146.83, 164.81, 174.61, 196.00, 220.00],
-    latin:  [220.00, 246.94, 261.63, 293.66, 329.63, 349.23, 392.00, 440.00],
-  };
-
-  /* Melodic phrases per genre — indices into SCALES */
-  const PHRASES = {
-    pop:    [[4,5,6,5,4,3],[3,4,5,4,3,2],[0,2,4,5,4,2],[5,6,7,6,5,4]],
-    hiphop: [[0,0,2,3,2,0],[3,2,0,2,3,5],[5,5,3,2,0,2],[2,3,5,5,3,2]],
-    edm:    [[0,2,4,6,4,2],[2,4,6,7,6,4],[4,6,7,6,4,2],[0,4,6,4,0,2]],
-    rock:   [[0,0,3,3,5,3],[3,5,0,3,5,3],[0,3,5,7,5,3],[5,3,0,3,0,5]],
-    latin:  [[0,2,3,5,3,2],[3,5,5,3,2,0],[5,3,2,0,2,3],[0,0,3,5,3,0]],
-  };
-
+  /* State */
   let _style = 'pop';
-  let _sched = null, _playing = false, _nextT = 0;
-  let _bpm = 72, _beatSec = 0.833;
+  let _sched = null, _playing = false;
+  let _bpm = 72, _beatSec = 0.833, _step16Sec = 0; /* duration of one 16th note */
+  let _nextT = 0, _step = 0; /* _step counts 16th-note steps */
+  let _bar = 0; /* bar count (increments every 16 steps) */
   let _rand = null, _seed = 0, _vol = 1.0;
-  let _beatCb = null, _beatN = 0, _pulse = null;
-  let _phrasePos = 0, _curPhrase = null;
+  let _beatCb = null, _pulse = null;
 
-  /* ── Low-level sound builders (all check sid first) ── */
+  /* Melody state — stepwise motion */
+  let _melScaleIdx = 2; /* current position in scale array */
+  let _melDir = 1;      /* +1 ascending, -1 descending */
+  let _chordIdx = 0;    /* current chord in progression */
 
-  function _osc(c, t, type, freq, dur, amp, dest, sid) {
-    if (_globalSid !== sid || !dest) return;
-    const env = c.createGain();
-    env.gain.setValueAtTime(amp, t);
-    env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    const o = c.createOscillator(); o.type = type; o.frequency.value = freq;
-    o.connect(env); env.connect(dest); o.start(t); o.stop(t + dur + 0.02);
+  function _mkRand(s) {
+    let r = (s >>> 0) || 0xBEEF1234;
+    return () => { r ^= r<<13; r ^= r>>>17; r ^= r<<5; return (r>>>0)/0x100000000; };
+  }
+  function _makeSeed(p) {
+    const a = Math.round((p.ibiMean||833)*100) % 99991;
+    const b = Math.round((p.ibiJitter||15)*1000) % 99991;
+    let ws = 0;
+    if (p.waveSig && p.waveSig.length)
+      p.waveSig.forEach((v,i) => { ws = (ws ^ ((Math.round(v*32767)&0xFFFF)*(i+1))) >>> 0; });
+    return ((a*73856093) ^ (b*19349663) ^ ws ^ (Date.now()%999983)) >>> 0;
   }
 
-  function _oscEnv(c, t, type, freq, atkDur, susAmp, relT, dest, sid) {
-    if (_globalSid !== sid || !dest) return;
-    const env = c.createGain();
-    env.gain.setValueAtTime(0, t);
-    env.gain.linearRampToValueAtTime(susAmp, t + atkDur);
-    env.gain.exponentialRampToValueAtTime(0.0001, t + relT);
-    const o = c.createOscillator(); o.type = type; o.frequency.value = freq;
-    o.connect(env); env.connect(dest); o.start(t); o.stop(t + relT + 0.02);
+  /* ─────────────────────────────────────────────────────────────
+     MELODY: stepwise motion constrained to current chord tones
+     This is what makes music sound HARMONIC and CONTINUOUS.
+     Next note = step up or down the scale, biased toward chord tones.
+  ───────────────────────────────────────────────────────────── */
+  function _nextMelNote(g) {
+    const scale = g.scale;
+    const chord = g.chordProg[_chordIdx % g.chordProg.length];
+
+    /* Step: move ±1 in scale, occasionally ±2 for interest */
+    const step = _rand() < 0.75 ? 1 : 2;
+    _melScaleIdx += _melDir * step;
+
+    /* Bounce at scale edges */
+    if (_melScaleIdx >= scale.length - 1) { _melScaleIdx = scale.length - 1; _melDir = -1; }
+    if (_melScaleIdx <= 0)                { _melScaleIdx = 0; _melDir = 1; }
+
+    /* 30% chance: snap to nearest chord tone for harmonic feel */
+    if (_rand() < 0.30) {
+      const chordFreqs = chord.map(i => scale[i % scale.length]);
+      /* find chord tone closest to current scale position */
+      const cur = scale[_melScaleIdx];
+      let best = 0, bestDist = Infinity;
+      chordFreqs.forEach((f, i) => {
+        const d = Math.abs(f - cur);
+        if (d < bestDist) { bestDist = d; best = chord[i]; }
+      });
+      _melScaleIdx = best % scale.length;
+    }
+
+    /* 15% chance: flip direction for melodic shape */
+    if (_rand() < 0.15) _melDir *= -1;
+
+    return scale[_melScaleIdx];
   }
+
+  /* Update chord every 4 bars */
+  function _advanceChord(g) {
+    _chordIdx = (_chordIdx + 1) % g.chordProg.length;
+  }
+
+  /* ─────────────────────────────────────────────────────────────
+     SOUND BUILDERS — all take (ctx, time, dest, sid)
+  ───────────────────────────────────────────────────────────── */
 
   function _kick(c, t, dest, sid) {
     if (_globalSid !== sid || !dest) return;
-    const env = c.createGain(); env.gain.setValueAtTime(0.88, t); env.gain.exponentialRampToValueAtTime(0.0001, t+0.18);
-    const osc = c.createOscillator(); osc.type='sine';
-    osc.frequency.setValueAtTime(120, t); osc.frequency.exponentialRampToValueAtTime(28, t+0.16);
-    osc.connect(env); env.connect(dest); osc.start(t); osc.stop(t+0.22);
+    const e = c.createGain(); e.gain.setValueAtTime(0.9, t); e.gain.exponentialRampToValueAtTime(0.001, t+0.22);
+    const o = c.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(28, t+0.18);
+    o.connect(e); e.connect(dest); o.start(t); o.stop(t+0.25);
   }
 
   function _snare(c, t, dest, sid) {
     if (_globalSid !== sid || !dest) return;
-    const n = _mkNoise(c), hp = c.createBiquadFilter(), env = c.createGain();
-    hp.type='highpass'; hp.frequency.value=1800;
-    env.gain.setValueAtTime(0.50, t); env.gain.exponentialRampToValueAtTime(0.0001, t+0.13);
-    n.connect(hp); hp.connect(env); env.connect(dest); n.start(t); n.stop(t+0.15);
+    /* Body tone */
+    const to = c.createOscillator(), te = c.createGain();
+    to.type = 'triangle'; to.frequency.setValueAtTime(200, t); to.frequency.exponentialRampToValueAtTime(100, t+0.08);
+    te.gain.setValueAtTime(0.35, t); te.gain.exponentialRampToValueAtTime(0.001, t+0.10);
+    to.connect(te); te.connect(dest); to.start(t); to.stop(t+0.12);
+    /* Noise crack */
+    const buf = c.createBuffer(1, Math.floor(c.sampleRate*0.15), c.sampleRate);
+    const d = buf.getChannelData(0); for (let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+    const n = c.createBufferSource(); n.buffer = buf;
+    const hp = c.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=1500;
+    const ne = c.createGain(); ne.gain.setValueAtTime(0.42, t); ne.gain.exponentialRampToValueAtTime(0.001, t+0.14);
+    n.connect(hp); hp.connect(ne); ne.connect(dest); n.start(t); n.stop(t+0.16);
   }
 
   function _hat(c, t, amp, dest, sid) {
     if (_globalSid !== sid || !dest) return;
-    const n = _mkNoise(c), hp = c.createBiquadFilter(), env = c.createGain();
-    hp.type='highpass'; hp.frequency.value=9500;
-    env.gain.setValueAtTime(amp, t); env.gain.exponentialRampToValueAtTime(0.0001, t+0.025);
-    n.connect(hp); hp.connect(env); env.connect(dest); n.start(t); n.stop(t+0.03);
+    const buf = c.createBuffer(1, Math.floor(c.sampleRate*0.04), c.sampleRate);
+    const d = buf.getChannelData(0); for (let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+    const n = c.createBufferSource(); n.buffer = buf;
+    const hp = c.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=9000;
+    const e = c.createGain(); e.gain.setValueAtTime(amp, t); e.gain.exponentialRampToValueAtTime(0.001, t+0.032);
+    n.connect(hp); hp.connect(e); e.connect(dest); n.start(t); n.stop(t+0.04);
   }
 
-  function _clap(c, t, dest, sid) {
+  function _openHat(c, t, dest, sid) {
     if (_globalSid !== sid || !dest) return;
-    for (let i = 0; i < 3; i++) {
-      const n=_mkNoise(c), bp=c.createBiquadFilter(), env=c.createGain();
-      bp.type='bandpass'; bp.frequency.value=1100; bp.Q.value=1.2;
-      env.gain.setValueAtTime(0.32, t+i*0.009); env.gain.exponentialRampToValueAtTime(0.0001, t+i*0.009+0.07);
-      n.connect(bp); bp.connect(env); env.connect(dest); n.start(t+i*0.009); n.stop(t+i*0.009+0.08);
-    }
+    const buf = c.createBuffer(1, Math.floor(c.sampleRate*0.18), c.sampleRate);
+    const d = buf.getChannelData(0); for (let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+    const n = c.createBufferSource(); n.buffer = buf;
+    const hp = c.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=7000;
+    const e = c.createGain(); e.gain.setValueAtTime(0.28, t); e.gain.exponentialRampToValueAtTime(0.001, t+0.16);
+    n.connect(hp); hp.connect(e); e.connect(dest); n.start(t); n.stop(t+0.20);
+  }
+
+  function _bass(c, t, freq, dur, dest, sid) {
+    if (_globalSid !== sid || !dest) return;
+    const e = c.createGain(); e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(0.55, t+0.012);
+    e.gain.setValueAtTime(0.55, t+dur-0.05); e.gain.linearRampToValueAtTime(0.001, t+dur);
+    const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.value = freq;
+    const lp = c.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=400;
+    o.connect(lp); lp.connect(e); e.connect(dest); o.start(t); o.stop(t+dur+0.02);
   }
 
   function _bass808(c, t, freq, dur, dest, sid) {
     if (_globalSid !== sid || !dest) return;
-    const env=c.createGain(); env.gain.setValueAtTime(0.58,t); env.gain.exponentialRampToValueAtTime(0.0001,t+dur);
-    const osc=c.createOscillator(); osc.type='sine';
-    osc.frequency.setValueAtTime(freq,t); osc.frequency.exponentialRampToValueAtTime(freq*0.45,t+dur*0.65);
-    osc.connect(env); env.connect(dest); osc.start(t); osc.stop(t+dur+0.05);
+    const e = c.createGain(); e.gain.setValueAtTime(0.62, t); e.gain.exponentialRampToValueAtTime(0.001, t+dur);
+    const o = c.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(freq, t); o.frequency.exponentialRampToValueAtTime(freq*0.42, t+dur*0.6);
+    o.connect(e); e.connect(dest); o.start(t); o.stop(t+dur+0.02);
   }
 
   function _sawLead(c, t, freq, dur, dest, sid) {
     if (_globalSid !== sid || !dest) return;
-    const env=c.createGain(); env.gain.setValueAtTime(0,t); env.gain.linearRampToValueAtTime(0.20,t+0.008); env.gain.exponentialRampToValueAtTime(0.0001,t+dur*0.88); env.connect(dest);
-    const osc=c.createOscillator(); osc.type='sawtooth'; osc.frequency.value=freq;
-    const f=c.createBiquadFilter(); f.type='lowpass'; f.frequency.value=2200; f.Q.value=2;
-    osc.connect(f); f.connect(env); osc.start(t); osc.stop(t+dur);
+    const e = c.createGain(); e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(0.18, t+0.010);
+    e.gain.exponentialRampToValueAtTime(0.001, t+dur);
+    const o = c.createOscillator(); o.type='sawtooth'; o.frequency.value=freq;
+    const lp = c.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=2000; lp.Q.value=1.5;
+    o.connect(lp); lp.connect(e); e.connect(dest); o.start(t); o.stop(t+dur+0.01);
   }
 
-  function _triLead(c, t, freq, dur, dest, sid) {
+  function _sineLead(c, t, freq, dur, dest, sid) {
     if (_globalSid !== sid || !dest) return;
-    const env=c.createGain(); env.gain.setValueAtTime(0,t); env.gain.linearRampToValueAtTime(0.18,t+0.012); env.gain.exponentialRampToValueAtTime(0.0001,t+dur*0.88); env.connect(dest);
-    const osc=c.createOscillator(); osc.type='triangle'; osc.frequency.value=freq;
-    osc.connect(env); osc.start(t); osc.stop(t+dur);
+    const e = c.createGain(); e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(0.20, t+0.015);
+    e.gain.setValueAtTime(0.20, t+dur-0.06); e.gain.linearRampToValueAtTime(0.001, t+dur);
+    const o = c.createOscillator(); o.type='sine'; o.frequency.value=freq;
+    o.connect(e); e.connect(dest); o.start(t); o.stop(t+dur+0.01);
+  }
+
+  function _squareLead(c, t, freq, dur, dest, sid) {
+    if (_globalSid !== sid || !dest) return;
+    const e = c.createGain(); e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(0.12, t+0.008);
+    e.gain.exponentialRampToValueAtTime(0.001, t+dur);
+    const o = c.createOscillator(); o.type='square'; o.frequency.value=freq;
+    const lp = c.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=1200;
+    o.connect(lp); lp.connect(e); e.connect(dest); o.start(t); o.stop(t+dur+0.01);
   }
 
   function _powerChord(c, t, root, dur, dest, sid) {
     if (_globalSid !== sid || !dest) return;
-    const env=c.createGain(); env.gain.setValueAtTime(0,t); env.gain.linearRampToValueAtTime(0.26,t+0.010); env.gain.exponentialRampToValueAtTime(0.0001,t+dur*0.9); env.connect(dest);
-    /* Distortion waveshaper */
-    const curve=new Float32Array(512); for(let i=0;i<512;i++){const x=i*2/511-1;curve[i]=Math.tanh(x*5);}
-    const ws=c.createWaveShaper(); ws.curve=curve; ws.oversample='2x';
-    const mix=c.createGain(); mix.gain.value=0.5;
-    const o1=c.createOscillator(), o2=c.createOscillator();
-    o1.type='square'; o2.type='square'; o1.frequency.value=root; o2.frequency.value=root*1.498;
-    o1.connect(ws); o2.connect(ws); ws.connect(mix); mix.connect(env);
-    o1.start(t); o2.start(t); o1.stop(t+dur); o2.stop(t+dur);
+    const e = c.createGain(); e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(0.24, t+0.012);
+    e.gain.setValueAtTime(0.24, t+dur-0.04); e.gain.linearRampToValueAtTime(0.001, t+dur);
+    const curve = new Float32Array(512);
+    for (let i=0;i<512;i++) { const x=i*2/511-1; curve[i]=Math.tanh(x*4); }
+    const ws = c.createWaveShaper(); ws.curve=curve; ws.oversample='2x';
+    const mix = c.createGain(); mix.gain.value=0.5;
+    const o1 = c.createOscillator(), o2 = c.createOscillator();
+    o1.type='sawtooth'; o2.type='sawtooth';
+    o1.frequency.value=root; o2.frequency.value=root*1.498; /* perfect 5th */
+    o1.connect(ws); o2.connect(ws); ws.connect(mix); mix.connect(e); e.connect(dest);
+    o1.start(t); o2.start(t); o1.stop(t+dur+0.01); o2.stop(t+dur+0.01);
   }
 
   function _clave(c, t, dest, sid) {
     if (_globalSid !== sid || !dest) return;
-    const osc=c.createOscillator(), env=c.createGain();
-    osc.type='triangle'; osc.frequency.value=1200;
-    env.gain.setValueAtTime(0.26,t); env.gain.exponentialRampToValueAtTime(0.0001,t+0.025);
-    osc.connect(env); env.connect(dest); osc.start(t); osc.stop(t+0.03);
+    const o = c.createOscillator(), e = c.createGain();
+    o.type='triangle'; o.frequency.value=1200;
+    e.gain.setValueAtTime(0.24, t); e.gain.exponentialRampToValueAtTime(0.001, t+0.025);
+    o.connect(e); e.connect(dest); o.start(t); o.stop(t+0.03);
   }
 
-  function _conga(c, t, pitch, dest, sid) {
+  function _conga(c, t, pitch, amp, dest, sid) {
     if (_globalSid !== sid || !dest) return;
-    const osc=c.createOscillator(), env=c.createGain(); osc.type='sine';
-    osc.frequency.setValueAtTime(pitch,t); osc.frequency.exponentialRampToValueAtTime(pitch*0.5,t+0.09);
-    env.gain.setValueAtTime(0.38,t); env.gain.exponentialRampToValueAtTime(0.0001,t+0.12);
-    osc.connect(env); env.connect(dest); osc.start(t); osc.stop(t+0.14);
+    const o = c.createOscillator(), e = c.createGain(); o.type='sine';
+    o.frequency.setValueAtTime(pitch, t); o.frequency.exponentialRampToValueAtTime(pitch*0.55, t+0.09);
+    e.gain.setValueAtTime(amp, t); e.gain.exponentialRampToValueAtTime(0.001, t+0.12);
+    o.connect(e); e.connect(dest); o.start(t); o.stop(t+0.14);
   }
 
-  /* ── Get next melodic note, driven by ibiSeq for uniqueness ── */
-  function _nextNote(scale) {
-    /* Advance phrase position */
-    if (!_curPhrase || _phrasePos >= _curPhrase.length) {
-      /* Pick phrase: blend random + ibi-based selection */
-      const phrSet = PHRASES[_style] || PHRASES.pop;
-      /* Use ibiSeq to modulate phrase choice — heartbeat actually drives melody */
-      let ibiMod = 0;
-      if (_pulse && _pulse.ibiSeq && _pulse.ibiSeq.length) {
-        const idx = _beatN % _pulse.ibiSeq.length;
-        ibiMod = (_pulse.ibiSeq[idx] % 500) / 500; /* 0..1 from IBI variance */
-      }
-      const phrIdx = Math.floor((ibiMod * 0.5 + _rand() * 0.5) * phrSet.length) % phrSet.length;
-      _curPhrase = phrSet[phrIdx];
-      _phrasePos = 0;
-    }
-    const ni = _curPhrase[_phrasePos % _curPhrase.length];
-    _phrasePos++;
-    return scale[ni % scale.length];
+  /* EDM pad — sustained chord wash under the arpeggio */
+  function _edmPad(c, t, freq, dur, dest, sid) {
+    if (_globalSid !== sid || !dest) return;
+    [1, 1.25, 1.5].forEach((ratio, i) => {
+      const e = c.createGain();
+      e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(0.035, t+0.4+i*0.1);
+      e.gain.setValueAtTime(0.035, t+dur-0.4); e.gain.linearRampToValueAtTime(0, t+dur);
+      const o = c.createOscillator(); o.type='sine'; o.frequency.value=freq*ratio*0.5;
+      o.connect(e); e.connect(dest); o.start(t); o.stop(t+dur+0.01);
+    });
   }
 
-  /* ── Main tick: one beat, all percusion + melody ── */
+  /* ─────────────────────────────────────────────────────────────
+     MAIN TICK — fires on every 16th-note step
+     All genres share the same structured approach:
+       1. Drums: from sequencer pattern (deterministic, locked grid)
+       2. Bass: on beat 1 of each bar and key moments
+       3. Melody: stepwise motion, chord-aware
+  ───────────────────────────────────────────────────────────── */
   function _tick(c, t, sid) {
     if (_globalSid !== sid) return;
     const dest = window._GE_master; if (!dest) return;
-    const B = _beatSec;
-    const b4 = _beatN % 4, b8 = _beatN % 8, b16 = _beatN % 16;
-    const sc = SCALES[_style] || SCALES.pop;
+    const g = GENRES[_style] || GENRES.pop;
+    const s = _step % 16; /* position within current bar */
+    const D16 = _step16Sec; /* duration of one 16th note */
+    const BEAT = D16 * 4;  /* one full beat (quarter note) */
 
-    if (_style === 'pop') {
-      _kick(c, t, dest, sid);
-      if (b4===1||b4===3) _snare(c, t, dest, sid);
-      _hat(c, t, 0.15, dest, sid);
-      if (b8%2===0) _hat(c, t+B*0.5, 0.08, dest, sid);
-      _sawLead(c, t, _nextNote(sc), B*0.82, dest, sid);
+    /* ── Drums ── */
+    if (g.seqK[s])  _kick(c, t, dest, sid);
+    if (g.seqS[s])  _snare(c, t, dest, sid);
+    if (g.seqH[s])  _hat(c, t, s%2===0?0.14:0.08, dest, sid);
+    if (g.seqOH[s]) _openHat(c, t, dest, sid);
 
-    } else if (_style === 'hiphop') {
-      if (b4===0||b4===2) _kick(c, t, dest, sid);
-      if (b4===1||b4===3) _snare(c, t, dest, sid);
-      for (let h=0; h<4; h++) _hat(c, t+h*(B/4), 0.05+(h%2)*0.10, dest, sid);
-      if (b4===0||b4===2) _bass808(c, t, sc[0]*0.5, B*0.9, dest, sid);
-      _triLead(c, t, _nextNote(sc), B*1.7, dest, sid);
-
-    } else if (_style === 'edm') {
-      _kick(c, t, dest, sid);
-      if (b4===1||b4===3) _clap(c, t, dest, sid);
-      /* Arpeggio: 4 notes per beat */
-      for (let a=0; a<4; a++) {
-        const f = _nextNote(sc);
-        _sawLead(c, t+a*(B/4), f, B*0.20, dest, sid);
-      }
-      /* Pad on beat 0 */
-      if (b4===0) _oscEnv(c, t, 'sine', sc[0]*0.5, 0.4, 0.06, B*4, dest, sid);
-
-    } else if (_style === 'rock') {
-      _kick(c, t, dest, sid);
-      if (b4===1||b4===3) _snare(c, t, dest, sid);
-      _hat(c, t, 0.13, dest, sid);
-      _hat(c, t+B*0.5, 0.07, dest, sid);
-      _powerChord(c, t, _nextNote(sc), B*0.92, dest, sid);
-
-    } else if (_style === 'latin') {
-      /* 3-2 clave */
-      const CLAVE = [0,3,6,10,14];
-      if (CLAVE.includes(b16)) _clave(c, t, dest, sid);
-      _conga(c, t, b4===0?200 : b4===2?320 : 260, dest, sid);
-      _triLead(c, t, _nextNote(sc), B*0.85, dest, sid);
+    /* ── Genre-specific extras ── */
+    if (_style === 'latin' && g.clave[s]) _clave(c, t, dest, sid);
+    if (_style === 'latin') {
+      if (s===0) _conga(c, t, 180, 0.40, dest, sid);
+      if (s===4) _conga(c, t, 260, 0.30, dest, sid);
+      if (s===8) _conga(c, t, 200, 0.35, dest, sid);
+      if (s===12)_conga(c, t, 320, 0.28, dest, sid);
     }
 
-    if (_beatCb) setTimeout(_beatCb, Math.max(0, (t - c.currentTime) * 1000));
-    _beatN++;
+    /* ── Bass ── */
+    const bassNote = g.bass[_chordIdx % g.bass.length];
+    if (_style === 'hiphop') {
+      /* Hip-hop: 808 on kick steps */
+      if (g.seqK[s]) _bass808(c, t, bassNote, D16*3.5, dest, sid);
+    } else if (_style === 'edm') {
+      /* EDM: sustained bass note per beat */
+      if (s%4===0) _bass(c, t, bassNote*0.5, BEAT*0.95, dest, sid);
+    } else if (_style === 'latin') {
+      if (s===0||s===8) _bass(c, t, bassNote, BEAT*0.92, dest, sid);
+    } else {
+      /* Pop/Rock: bass on beats 1 and 3 */
+      if (s===0||s===8) _bass(c, t, bassNote, BEAT*0.88, dest, sid);
+    }
+
+    /* ── Melody ── */
+    if (g.melRhythm[s]) {
+      const freq = (_style === 'edm')
+        ? g.scale[g.arpPat[s] % g.scale.length] /* EDM: fixed arp pattern, not random */
+        : _nextMelNote(g);
+
+      const melDur = (_style === 'edm') ? D16*0.85
+                   : (_style === 'hiphop') ? BEAT*1.6
+                   : (_style === 'rock')   ? BEAT*0.88
+                   : (_style === 'latin')  ? D16*3.0
+                   : BEAT*0.78; /* pop */
+
+      switch (_style) {
+        case 'pop':    _sawLead(c, t, freq, melDur, dest, sid); break;
+        case 'hiphop': _sineLead(c, t, freq, melDur, dest, sid); break;
+        case 'edm':    _sawLead(c, t, freq, melDur, dest, sid); break;
+        case 'rock':   _powerChord(c, t, freq, melDur, dest, sid); break;
+        case 'latin':  _sineLead(c, t, freq, melDur, dest, sid); break;
+      }
+    }
+
+    /* EDM: add pad on bar start */
+    if (_style==='edm' && s===0) {
+      const padFreq = g.scale[_chordIdx%g.scale.length];
+      _edmPad(c, t, padFreq, BEAT*16, dest, sid); /* sustain whole bar */
+    }
+
+    /* Beat callback on quarter notes */
+    if (s%4===0 && _beatCb) setTimeout(_beatCb, Math.max(0, (t-c.currentTime)*1000));
+
+    /* ── Advance step counter ── */
+    _step++;
+
+    /* New bar every 16 steps: advance chord progression */
+    if (_step % 16 === 0) {
+      _bar++;
+      /* Change chord every 4 bars for musical phrasing */
+      if (_bar % 4 === 0) {
+        const g2 = GENRES[_style] || GENRES.pop;
+        _advanceChord(g2);
+      }
+    }
   }
 
+  /* Scheduler: fire on 16th-note grid — strict clock, no IBI wobble */
   function _scheduler(c, sid) {
-    if (_globalSid !== sid) return;  /* HARD EXIT */
+    if (_globalSid !== sid) return;
     while (_nextT < c.currentTime + 0.4) {
       _tick(c, _nextT, sid);
-      /* Real heartbeat timing: use actual IBI sequence cyclically */
-      let beatDur = _beatSec;
-      if (_pulse && _pulse.ibiSeq && _pulse.ibiSeq.length >= 2) {
-        const raw = _pulse.ibiSeq[_beatN % _pulse.ibiSeq.length] / 1000;
-        beatDur = Math.max(0.28, Math.min(2.0, raw));
-      }
-      _nextT += beatDur;
+      _nextT += _step16Sec; /* locked 16th-note grid */
     }
-    _sched = setTimeout(() => _scheduler(c, sid), 80);
+    _sched = setTimeout(() => _scheduler(c, sid), 60);
   }
 
   async function start(bpm, hrv, pulseOrSeed) {
     _hardStop();
     if (_sched) { clearTimeout(_sched); _sched = null; }
-    _playing = false; _beatN = 0; _phrasePos = 0; _curPhrase = null;
+    _playing = false; _step = 0; _bar = 0;
+    _melScaleIdx = 2; _melDir = 1; _chordIdx = 0;
 
     const c = await _resumeCtx();
     if (!c || c.state !== 'running') return false;
 
-    _bpm = Math.max(40, Math.min(200, bpm || 72)); _beatSec = 60 / _bpm;
+    _bpm = Math.max(40, Math.min(200, bpm || 72));
+    _beatSec = 60 / _bpm;
+    _step16Sec = _beatSec / 4; /* 16th note duration */
     const H = Math.max(5, Math.min(100, hrv || 45));
 
     if (typeof pulseOrSeed === 'number' && pulseOrSeed > 0) {
       _seed = pulseOrSeed >>> 0;
-      _pulse = { bpm:_bpm, hrv:H, ibiMean:60000/_bpm, ibiJitter:H*0.3,
-                 ibiSeq:[60000/_bpm], waveSig:[] };
+      _pulse = { bpm:_bpm, hrv:H, ibiMean:60000/_bpm, ibiJitter:H*0.3, waveSig:[], ibiSeq:[] };
     } else if (pulseOrSeed && pulseOrSeed.ibiMean) {
       _pulse = pulseOrSeed;
       _seed = _makeSeed(_pulse);
     } else {
-      _pulse = { bpm:_bpm, hrv:H, ibiMean:60000/_bpm, ibiJitter:15,
-                 ibiSeq:[60000/_bpm], waveSig:[] };
+      _pulse = { bpm:_bpm, hrv:H, ibiMean:60000/_bpm, ibiJitter:15, waveSig:[], ibiSeq:[] };
       _seed = (_bpm*6271 + H*3919 + Date.now()%999983) >>> 0;
     }
     _rand = _mkRand(_seed);
 
+    /* Starting scale position influenced by pulse — unique per person */
+    if (_pulse.waveSig && _pulse.waveSig.length > 0) {
+      const g = GENRES[_style] || GENRES.pop;
+      _melScaleIdx = Math.floor(_pulse.waveSig[0] * (g.scale.length - 1));
+    }
+
     const sid = _globalSid;
 
+    /* Signal chain: compressor → vol → master */
     const comp = c.createDynamicsCompressor();
-    comp.threshold.value=-16; comp.ratio.value=3; comp.attack.value=0.005; comp.release.value=0.25;
+    comp.threshold.value=-14; comp.knee.value=8;
+    comp.ratio.value=3; comp.attack.value=0.003; comp.release.value=0.20;
     comp.connect(c.destination);
+
+    /* Subtle reverb using delay feedback */
+    const del = c.createDelay(0.5); del.delayTime.value=0.18;
+    const fb  = c.createGain();     fb.gain.value=0.18;
+    const wet = c.createGain();     wet.gain.value=0.15;
+    const dlp = c.createBiquadFilter(); dlp.type='lowpass'; dlp.frequency.value=1200;
+    del.connect(dlp); dlp.connect(fb); fb.connect(del); del.connect(wet); wet.connect(comp);
 
     const vol = c.createGain(); vol.gain.value = _vol; vol.connect(comp);
     window._GE_vol = vol;
 
     const master = c.createGain();
     master.gain.setValueAtTime(0, c.currentTime);
-    master.gain.linearRampToValueAtTime(0.70, c.currentTime + 0.6);
+    master.gain.linearRampToValueAtTime(0.72, c.currentTime + 0.5);
     master.connect(vol);
+    master.connect(del); /* send to reverb */
     window._GE_master = master;
 
     _nextT = c.currentTime + 0.05;
@@ -2822,48 +3067,42 @@ const GenreEngine = (() => {
   function stop() {
     _hardStop();
     if (_sched) { clearTimeout(_sched); _sched = null; }
-    _playing = false; _beatN = 0;
+    _playing = false; _step = 0;
   }
-
-  function fadeOut(sec = 2) {
-    const m = window._GE_master, c = _ctx;
-    if (!m || !c) { stop(); return; }
-    const now = c.currentTime;
+  function fadeOut(sec=2) {
+    const m=window._GE_master, c=_ctx;
+    if (!m||!c) { stop(); return; }
+    const now=c.currentTime;
     m.gain.cancelScheduledValues(now);
     m.gain.setValueAtTime(m.gain.value, now);
-    m.gain.linearRampToValueAtTime(0.0001, now + sec);
-    setTimeout(stop, (sec + 0.2) * 1000);
+    m.gain.linearRampToValueAtTime(0.0001, now+sec);
+    setTimeout(stop, (sec+0.2)*1000);
   }
-
   function setVolume(v) {
-    _vol = Math.max(0, Math.min(1, v));
-    if (window._GE_vol && _ctx)
-      window._GE_vol.gain.setTargetAtTime(_vol, _ctx.currentTime, 0.05);
+    _vol=Math.max(0,Math.min(1,v));
+    if (window._GE_vol&&_ctx) window._GE_vol.gain.setTargetAtTime(_vol,_ctx.currentTime,0.05);
   }
-
   function setStyle(s) { _style = GENRES[s] ? s : 'pop'; }
-  function getStyle() { return _style; }
-  function getLabel(s) { return GENRES[s]?.label || 'Pop'; }
+  function getStyle()   { return _style; }
+  function getLabel(s)  { return GENRES[s]?.label || 'Pop'; }
   function getSessionSeed() { return _seed; }
-  function setBeatCallback(fn) { _beatCb = typeof fn === 'function' ? fn : null; }
-  function getVolume() { return _vol; }
+  function setBeatCallback(fn) { _beatCb = typeof fn==='function' ? fn : null; }
+  function getVolume()    { return _vol; }
   function getIsPlaying() { return _playing; }
-  function setStage() {}
-  function getStage() { return 1; }
-  function getDuration() { return 90; }
+  function setStage()     {}
+  function getStage()     { return 1; }
+  function getDuration()  { return 90; }
   function getStageName() { return 'Playing'; }
   async function resume() { return _resumeCtx(); }
   function getMeta(bpm) {
-    const g = GENRES[_style] || GENRES.pop;
-    return { title:g.label, subtitle:`${g.emoji} ${g.label} · ${bpm} BPM`,
-             instrument:g.label, style:g.label };
+    const g = GENRES[_style]||GENRES.pop;
+    return { title:g.label, subtitle:`${g.emoji} ${g.label} · ${bpm} BPM`, instrument:g.label, style:g.label };
   }
 
   return { start, stop, fadeOut, resume, setStyle, getStyle, getLabel, getMeta, setStage, getStage,
            setBeatCallback, setVolume, getVolume, getSessionSeed, getDuration, getIsPlaying, getStageName };
 })();
 
-window.GenreEngine = GenreEngine;
 </script>
 
 
@@ -3062,135 +3301,144 @@ function startResultWave(bpm) {
   const canvas=$id('playerWave'); if(!canvas)return;
   const ctx=canvas.getContext('2d');
   const dpr=window.devicePixelRatio||1;
-  canvas.width=canvas.offsetWidth*dpr; canvas.height=canvas.offsetHeight*dpr;
+  /* Explicitly size to CSS layout */
+  canvas.width=canvas.offsetWidth*dpr;
+  canvas.height=canvas.offsetHeight*dpr;
   const W=canvas.width, H=canvas.height;
 
   /* Genre-aware accent colour */
   const GCOL={meghMalhar:'#00d4aa',pop:'#e8334a',hiphop:'#b47aff',edm:'#00cfff',rock:'#ff7a2f',latin:'#ffcc00'};
-  const col=GCOL[S.musicStyle||'meghMalhar']||'#e8334a';
+  const col=GCOL[S.musicStyle||'meghMalhar']||'#00d4aa';
 
-  /* Use real captured PPG buffer */
+  /* ── Build scroll buffer from real PPG data, looping continuously ──
+     Strategy: take the captured PPG signal (normalised), then scroll
+     it left one pixel per frame, cycling through the buffer.
+     This gives a "live ECG monitor" feel using YOUR actual waveform. */
   const rawBuf=(S.ppgBuf&&S.ppgBuf.length>20)?S.ppgBuf.slice():null;
-  const rawTs =(S.ppgTs &&S.ppgTs.length >0) ?S.ppgTs.slice() :[];
 
-  /* Build peak index list from peakTs matched into ppgTs array */
-  const peakIdxs=[];
-  if(rawBuf&&S.peakTs&&S.peakTs.length&&rawTs.length===rawBuf.length){
-    S.peakTs.forEach(pt=>{
-      /* find closest timestamp in ppgTs */
-      let best=-1,bestDiff=Infinity;
-      for(let k=0;k<rawTs.length;k++){
-        const d=Math.abs(rawTs[k]-pt);
-        if(d<bestDiff){bestDiff=d;best=k;}
-      }
-      if(best>=0&&bestDiff<100) peakIdxs.push(best);
-    });
+  /* Normalise a source buffer to [0,1] */
+  function normBuf(buf){
+    const lo=Math.min(...buf),hi=Math.max(...buf),rng=hi-lo||1;
+    return buf.map(v=>(v-lo)/rng);
   }
 
-  if(!rawBuf){
-    /* ── Fallback: animated synthetic ECG ── */
-    const cycle=120,pts=[];
-    for(let i=0;i<cycle;i++){
-      const t=i/cycle;let y=0;
-      if(t>.10&&t<.15)y=-.10*Math.sin((t-.10)/.05*Math.PI);
-      else if(t>.25&&t<.28)y=.20*Math.sin((t-.25)/.03*Math.PI);
-      else if(t>.28&&t<.32)y=-1.0*Math.sin((t-.28)/.04*Math.PI);
-      else if(t>.32&&t<.36)y=.55*Math.sin((t-.32)/.04*Math.PI);
-      else if(t>.40&&t<.52)y=.15*Math.sin((t-.40)/.12*Math.PI);
+  /* ── Fallback: synthetic PPG-shaped waveform if no real data ── */
+  function makeSynthPPG(len){
+    const pts=[];
+    const period=Math.round(60000/bpm/33); /* samples per beat at ~30fps */
+    for(let i=0;i<len;i++){
+      const phase=(i%period)/period;
+      let y=0;
+      /* PPG shape: gradual rise, sharp peak, dicrotic notch, slow descent */
+      if(phase<.12)       y=phase/.12*.15;
+      else if(phase<.22)  y=.15+(phase-.12)/.10*.85;  /* upstroke */
+      else if(phase<.28)  y=1-(phase-.22)/.06*.35;    /* systolic peak descent */
+      else if(phase<.34)  y=.65+(phase-.28)/.06*.08;  /* dicrotic notch bump */
+      else if(phase<.42)  y=.73-(phase-.34)/.08*.73;  /* fall to baseline */
+      else                y=0;
       pts.push(y);
     }
-    const hist=new Array(80).fill(0);let fr=0;
-    const draw=()=>{
-      ctx.clearRect(0,0,W,H);
-      hist.push(pts[fr%cycle]);if(hist.length>W/dpr)hist.shift();
-      const N=hist.length,lo=Math.min(...hist),hi2=Math.max(...hist),rng=hi2-lo||1;
-      ctx.beginPath();ctx.strokeStyle=col.replace(')',',0.15)').replace('rgb','rgba')||'rgba(232,51,74,.15)';
-      ctx.lineWidth=7*dpr;ctx.lineJoin='round';ctx.lineCap='round';
-      hist.forEach((v,i)=>{const x=(i/(N-1))*W,y=H/2-((v-lo)/rng-.5)*H*.72;i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});ctx.stroke();
-      ctx.beginPath();ctx.strokeStyle=col;ctx.lineWidth=2*dpr;ctx.lineJoin='round';ctx.lineCap='round';
-      hist.forEach((v,i)=>{const x=(i/(N-1))*W,y=H/2-((v-lo)/rng-.5)*H*.72;i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});ctx.stroke();
-      fr=(fr+1)%(cycle*2);S.resultWavRaf=requestAnimationFrame(draw);
-    };
-    draw();return;
+    return pts;
   }
 
-  /* ── Real PPG: show last N samples that fit the canvas ── */
-  const SHOW=Math.min(rawBuf.length,Math.floor(W/dpr));
-  const seg=rawBuf.slice(-SHOW);
-  const segOff=rawBuf.length-SHOW; /* offset into rawBuf where seg starts */
-  const lo=Math.min(...seg),hi=Math.max(...seg),rng=hi-lo||1;
-  const pad=H*.10;
-  const px=i=>(seg.length>1?(i/(seg.length-1)):0.5)*W;
-  const py=v=>H-pad-((v-lo)/rng)*(H-pad*2);
+  /* Source data: real PPG normalised, or synthetic */
+  const src = rawBuf ? normBuf(rawBuf) : makeSynthPPG(300);
 
-  /* Filter peakIdxs to those in visible segment */
-  const visiblePeaks=peakIdxs.filter(k=>k>=segOff).map(k=>k-segOff);
+  /* Visible window: show N pixels worth of samples */
+  const VIEW = Math.floor(W/dpr); /* 1 sample = 1px */
 
-  /* ── Animated draw — gentle breathe pulse ── */
-  let alpha=1.0,aDir=-1;
-  const render=()=>{
+  /* Scroll history: pre-fill with start of source */
+  const history = [];
+  for(let i=0;i<VIEW;i++) history.push(src[i%src.length]);
+
+  /* Find R-peak positions within the source buffer */
+  const peakSet=new Set();
+  if(rawBuf&&S.peakTs&&S.peakTs.length&&S.ppgTs&&S.ppgTs.length===rawBuf.length){
+    S.peakTs.forEach(pt=>{
+      let best=-1,bestD=Infinity;
+      for(let k=0;k<S.ppgTs.length;k++){
+        const d=Math.abs(S.ppgTs[k]-pt);
+        if(d<bestD){bestD=d;best=k;}
+      }
+      if(best>=0&&bestD<100) peakSet.add(best);
+    });
+  }
+  /* Also detect peaks in synthetic data */
+  if(!rawBuf){
+    const period=Math.round(60000/bpm/33);
+    for(let i=0;i<src.length;i+=period) peakSet.add(i);
+  }
+
+  /* Scroll position into source */
+  let srcPos = VIEW % src.length;
+  /* Flash brightness when a peak is visible at leading edge */
+  let flashAlpha=0;
+
+  const draw=()=>{
     if(!S.resultWavRaf)return;
-    alpha+=aDir*0.008;if(alpha<0.60)aDir=1;if(alpha>1.0)aDir=-1;
+
+    /* Advance: push one new sample from source, drop oldest */
+    const newSample = src[srcPos % src.length];
+    const isPeak    = peakSet.has(srcPos % src.length);
+    srcPos = (srcPos+1) % src.length;
+    history.shift();
+    history.push(newSample);
+    if(isPeak) flashAlpha=1.0;
+
     ctx.clearRect(0,0,W,H);
 
-    /* Grid */
-    ctx.strokeStyle='rgba(255,255,255,.035)';ctx.lineWidth=1;
-    for(let g=1;g<4;g++){const gy=(H/4)*g;ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
+    /* Background: very subtle grid */
+    ctx.strokeStyle='rgba(255,255,255,.04)';
+    ctx.lineWidth=1;
+    const gridY=[H*.25,H*.5,H*.75];
+    gridY.forEach(gy=>{ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();});
 
-    /* Glow layer */
-    ctx.globalAlpha=alpha*0.14;ctx.beginPath();ctx.strokeStyle=col;ctx.lineWidth=9*dpr;ctx.lineJoin='round';ctx.lineCap='round';
-    seg.forEach((v,i)=>i===0?ctx.moveTo(px(i),py(v)):ctx.lineTo(px(i),py(v)));ctx.stroke();
+    const N=history.length;
+    const pad=H*.08;
+    const px2=i=>(i/(N-1))*W;
+    const py2=v=>H-pad-v*(H-pad*2);
 
-    /* Main waveform line */
-    ctx.globalAlpha=alpha;ctx.beginPath();ctx.strokeStyle=col;ctx.lineWidth=2.2*dpr;ctx.lineJoin='round';ctx.lineCap='round';
-    seg.forEach((v,i)=>i===0?ctx.moveTo(px(i),py(v)):ctx.lineTo(px(i),py(v)));ctx.stroke();
-
-    /* R-peak dots + vertical tick + RR interval label */
-    ctx.globalAlpha=1;
-    visiblePeaks.forEach((pi,n)=>{
-      if(pi<0||pi>=seg.length)return;
-      const x=px(pi),y=py(seg[pi]);
-      /* Vertical tick from baseline */
-      ctx.strokeStyle='rgba(255,255,255,.15)';ctx.lineWidth=1;
-      ctx.beginPath();ctx.moveTo(x,H);ctx.lineTo(x,y+5*dpr);ctx.stroke();
-      /* Dot */
-      ctx.beginPath();ctx.arc(x,y,4.5*dpr,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fill();
-      ctx.beginPath();ctx.arc(x,y,3.5*dpr,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();
-      /* R label */
-      ctx.fillStyle=col;ctx.font=`bold ${9*dpr}px Helvetica Neue,Helvetica,Arial,sans-serif`;
-      ctx.fillText('R',x+5*dpr,y-5*dpr);
-      /* RR interval between consecutive R peaks */
-      if(n>0){
-        const prev=visiblePeaks[n-1];
-        if(prev>=0&&prev<seg.length){
-          const px2=px(prev),midX=(px2+x)/2;
-          const rrMs=S.ibiSeqDisplay?.[n]||Math.round((pi-prev)*(1000/30));
-          if(rrMs>300&&rrMs<2000){
-            ctx.fillStyle='rgba(255,255,255,.35)';ctx.font=`${7*dpr}px Helvetica Neue,sans-serif`;
-            ctx.fillText(`${rrMs}ms`,midX-12*dpr,H-4*dpr);
-          }
-        }
-      }
-    });
-
-    /* Label */
-    ctx.globalAlpha=0.5;ctx.fillStyle=col;
-    ctx.font=`${7.5*dpr}px Helvetica Neue,Helvetica,Arial,sans-serif`;
-    ctx.fillText('Your PPG · Live Heartbeat',6*dpr,12*dpr);
-
-    /* BPM badge top-right */
-    ctx.globalAlpha=0.7;ctx.fillStyle='rgba(255,255,255,.08)';
-    ctx.fillRect(W-38*dpr,2*dpr,36*dpr,14*dpr);
-    ctx.globalAlpha=0.9;ctx.fillStyle='#fff';
-    ctx.font=`bold ${8*dpr}px Helvetica Neue,sans-serif`;
-    ctx.fillText(`${bpm} BPM`,W-36*dpr,12*dpr);
+    /* Trailing fade: older samples are dimmer */
+    /* Draw in two passes: glow + sharp line */
+    ctx.globalAlpha=0.14+flashAlpha*0.06;
+    ctx.beginPath();ctx.strokeStyle=col;ctx.lineWidth=8*dpr;ctx.lineJoin='round';ctx.lineCap='round';
+    history.forEach((v,i)=>i===0?ctx.moveTo(px2(i),py2(v)):ctx.lineTo(px2(i),py2(v)));
+    ctx.stroke();
 
     ctx.globalAlpha=1;
-    S.resultWavRaf=requestAnimationFrame(render);
+    ctx.beginPath();ctx.strokeStyle=col;ctx.lineWidth=2*dpr;ctx.lineJoin='round';ctx.lineCap='round';
+    history.forEach((v,i)=>i===0?ctx.moveTo(px2(i),py2(v)):ctx.lineTo(px2(i),py2(v)));
+    ctx.stroke();
+
+    /* Leading edge dot — bright point at the live "cursor" */
+    const ex=W, ey=py2(history[N-1]);
+    if(flashAlpha>0){
+      /* Beat flash ring */
+      ctx.globalAlpha=flashAlpha*0.4;
+      ctx.beginPath();ctx.arc(ex,ey,8*dpr,0,Math.PI*2);
+      ctx.fillStyle=col;ctx.fill();
+    }
+    ctx.globalAlpha=1;
+    ctx.beginPath();ctx.arc(ex,ey,3*dpr,0,Math.PI*2);
+    ctx.fillStyle='#fff';ctx.fill();
+
+    /* Fade flash */
+    flashAlpha=Math.max(0,flashAlpha-0.04);
+
+    /* Label: genre + BPM */
+    ctx.globalAlpha=0.45;ctx.fillStyle=col;
+    ctx.font=`${7*dpr}px Helvetica Neue,Arial,sans-serif`;
+    ctx.fillText('Your Heartbeat',6*dpr,H-4*dpr);
+    ctx.globalAlpha=0.7;ctx.fillStyle='#fff';
+    ctx.font=`bold ${8*dpr}px Helvetica Neue,Arial,sans-serif`;
+    ctx.textAlign='right';
+    ctx.fillText(`${bpm} BPM`,W-4*dpr,H-4*dpr);
+    ctx.textAlign='left';
+
+    ctx.globalAlpha=1;
+    S.resultWavRaf=requestAnimationFrame(draw);
   };
-  /* Store ibiSeq display values for RR labels */
-  S.ibiSeqDisplay=(S.pulseFingerprint&&S.pulseFingerprint.ibiSeq)||[];
-  S.resultWavRaf=requestAnimationFrame(render);
+  draw();
 }
 function stopResultWave() { if(S.resultWavRaf){cancelAnimationFrame(S.resultWavRaf);S.resultWavRaf=null;} }
 
@@ -3569,6 +3817,8 @@ function selectGenre(style) {
   const icons = {meghMalhar:'☁️',pop:'🎤',hiphop:'🎧',edm:'⚡',rock:'🎸',latin:'🪘'};
   $set('mxTitle', name);
   $set('mxSub', `${icons[style]||'🎵'} ${name} · ${S.bpm||72} BPM`);
+  /* Restart waveform with new genre colour */
+  startResultWave(S.bpm||72);
   /* If music is currently playing, restart with new genre */
   const eng = _activeEngine();
   const wasPlaying = AudioEngine.getIsPlaying() || GenreEngine.getIsPlaying();
