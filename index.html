@@ -3757,40 +3757,101 @@ function _beginPPG(vid) {
   wC.width=wC.offsetWidth*dpr; wC.height=wC.offsetHeight*dpr;
   const HZ=30, MIN_GAP=350, SMOOTH_K=5, DC_WIN=90;
   const sq=[]; let lastPk=-1, fi=0;
+
+  /* ── ADAPTIVE FINGER DETECTION ─────────────────────────────────
+     Problem with fixed threshold (raw > 100):
+       - Camera auto-exposure varies wildly across devices
+       - Torch may not be supported; ambient light differs
+       - Some phones read 180+ with finger, some read 60
+     
+     Solution: RELATIVE detection using two signals:
+       1. Signal STABILITY: a finger makes the signal more stable
+          (DC component dominates). No finger = high variance from
+          ambient scene changes.
+       2. Red/Green RATIO: blood absorbs green, reflects red.
+          Finger presence increases red:green ratio.
+          This works even without torch on many devices.
+       3. Calibration window: first 60 frames (~2s) establish
+          the "no finger" baseline. Then compare against it.
+     
+     This approach works on all devices regardless of torch support.
+  ─────────────────────────────────────────────────────────────── */
+  let _calBuf = [];        /* calibration samples (no-finger baseline) */
+  let _calDone = false;    /* calibration complete flag */
+  let _calMean = -1;       /* baseline red mean */
+  let _calVar  = -1;       /* baseline variance */
+  let _noFingerFrames = 0; /* consecutive no-finger frames */
+  let _fingerFrames   = 0; /* consecutive finger frames */
+  const CAL_FRAMES = 45;   /* ~1.5s calibration window */
+  const FINGER_CONFIRM = 8;/* frames needed to confirm finger on/off */
+
   function frame() {
     if(!S.stream)return; fi++; S.frameN++;
     offCtx.drawImage(vid,0,0,40,30);
-    const px=offCtx.getImageData(0,0,40,30).data; let rs=0;
-    for(let i=0;i<px.length;i+=4) rs+=px[i];
-    const raw=rs/(px.length/4);
+    const px=offCtx.getImageData(0,0,40,30).data;
+    let rs=0, gs=0;
+    for(let i=0;i<px.length;i+=4){ rs+=px[i]; gs+=px[i+1]; }
+    const nPx = px.length/4;
+    const raw  = rs/nPx;       /* avg red */
+    const rawG = gs/nPx;       /* avg green */
+    const rg   = rawG>0 ? raw/rawG : 1; /* red:green ratio */
 
-    /* ── FINGER DETECTION ────────────────────────────────────────
-       A finger blocking the lens makes the red channel very bright
-       (torch light through tissue = high red).
-       Without a finger: raw red ≈ ambient, typically < 80 on most
-       cameras in normal lighting.
-       Threshold: avg red pixel > 100 = finger present.
-       This is the PRIMARY guard against phantom readings.
-    ─────────────────────────────────────────────────────────────── */
-    const fingerPresent = raw > 100;
-    S.fingerPresent = fingerPresent;
+    /* ── Phase 1: Calibration (first CAL_FRAMES frames) ── */
+    if (!_calDone) {
+      _calBuf.push(raw);
+      if (fi <= 10) {
+        /* Very first frames: just show prompt, wait for camera to settle */
+        setFb('init'); setSig(0);
+        S.rafId = requestAnimationFrame(frame); return;
+      }
+      if (_calBuf.length >= CAL_FRAMES) {
+        _calMean = _calBuf.reduce((a,b)=>a+b,0)/_calBuf.length;
+        const variance = _calBuf.reduce((s,v)=>s+(v-_calMean)**2,0)/_calBuf.length;
+        _calVar = Math.sqrt(variance);
+        _calDone = true;
+        /* If calibration mean is already very high, camera may have started
+           with finger on lens — redo calibration */
+        if (_calMean > 200) { _calBuf=[]; _calDone=false; fi=11; }
+      }
+      setFb('init'); setSig(0);
+      S.rafId = requestAnimationFrame(frame); return;
+    }
 
-    if (!fingerPresent) {
-      /* No finger — reset everything, show prompt */
+    /* ── Phase 2: Adaptive finger detection ── */
+    /* Finger present if EITHER:
+       (a) raw is significantly higher than calibration baseline (>20% brighter)
+       (b) red:green ratio > 1.4 (blood tissue optical signature)
+       Both are device-independent relative measures. */
+    const brighterThanBase = raw > _calMean * 1.20;
+    const redDominant      = rg > 1.4;
+    const fingerDetected   = brighterThanBase || redDominant;
+
+    if (fingerDetected) {
+      _fingerFrames++;
+      _noFingerFrames = 0;
+    } else {
+      _noFingerFrames++;
+      _fingerFrames = 0;
+    }
+
+    /* Require FINGER_CONFIRM consecutive frames to flip state — prevents flicker */
+    if (_fingerFrames >= FINGER_CONFIRM)   S.fingerPresent = true;
+    if (_noFingerFrames >= FINGER_CONFIRM) S.fingerPresent = false;
+
+    if (!S.fingerPresent) {
       sq.length = 0;
       S.ppgBuf = []; S.ppgTs = []; S.peakTs = [];
       S.bpmHist = []; S.prevBpm = 72;
       lastPk = -1;
       setSig(0);
       setFb('init');
-      if (fi > 15) { /* avoid flicker on first frames */
-        $set('liveBpm', '--');
-        const p = $id('bpmPill'); if (p) { p.textContent=''; p.className='bpm-pill'; }
-      }
+      $set('liveBpm', '--');
+      const p=$id('bpmPill'); if(p){p.textContent='';p.className='bpm-pill';}
       S.rafId = requestAnimationFrame(frame);
-      return; /* skip ALL processing — no finger, no data */
+      return;
     }
 
+    /* ── Finger confirmed — process PPG signal ── */
     S.ema=S.EMA_A*raw+(1-S.EMA_A)*S.ema;
     sq.push(S.ema); if(sq.length>SMOOTH_K)sq.shift();
     const sm=sq.reduce((a,b)=>a+b,0)/sq.length;
@@ -3800,11 +3861,10 @@ function _beginPPG(vid) {
     const win=S.ppgBuf.slice(-DC_WIN);
     const lo=Math.min(...win), hi=Math.max(...win), amp=hi-lo;
     S.amplitude=Math.min(1,amp/8);
-    /* q>=3 required for peak detection — raises bar above noise/movement */
     const q=Math.min(5,Math.floor(amp/1.2)); setSig(q);
-    if(fi<30)setFb('init'); else if(q<=1)setFb('weak'); else if(q<=2)setFb('ok'); else setFb('strong');
+    if(q<=1)setFb('weak'); else if(q<=2)setFb('ok'); else setFb('strong');
     const n=S.ppgBuf.length;
-    if(n>5&&q>=3){  /* raised from q>=2 to q>=3 — require decent signal */
+    if(n>5&&q>=2){  /* q>=2: finger is confirmed present, just need stable signal */
       const c1=S.ppgBuf[n-3],c2=S.ppgBuf[n-2],c3=S.ppgBuf[n-1];
       const norm=(c2-lo)/(amp||1);
       const isPk=c2>c1&&c2>c3&&norm>.55;
