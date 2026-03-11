@@ -1557,6 +1557,19 @@ input[type=range]::-moz-range-thumb {
 
   <div class="sr-only" aria-live="polite" id="bpmLive"></div>
   <div class="sr-only" aria-live="polite" id="sigLive"></div>
+
+  <!-- DEBUG PANEL — shows raw camera values so we can tune detection -->
+  <div id="dbgPanel" style="
+    background:rgba(0,0,0,0.85); border:1px solid #444; border-radius:8px;
+    padding:10px 14px; margin-top:10px; font-family:monospace; font-size:11px;
+    color:#0f0; line-height:1.7; display:block;">
+    <div style="color:#ff0;font-weight:bold;margin-bottom:4px;">📊 Debug — Camera Values</div>
+    <div>Raw R: <span id="dbgR">--</span> &nbsp; G: <span id="dbgG">--</span> &nbsp; R/G: <span id="dbgRG">--</span></div>
+    <div>Baseline: <span id="dbgBase">calibrating...</span></div>
+    <div>Finger: <span id="dbgFinger">--</span> &nbsp; Frames: <span id="dbgFi">0</span></div>
+    <div>Amp: <span id="dbgAmp">--</span> &nbsp; q: <span id="dbgQ">--</span> &nbsp; Peaks: <span id="dbgPeaks">0</span></div>
+    <div style="color:#aaa;font-size:10px;margin-top:4px;">Place finger → watch Raw R rise above Baseline</div>
+  </div>
 </section>
 
 
@@ -3818,13 +3831,16 @@ function _beginPPG(vid) {
     }
 
     /* ── Phase 2: Adaptive finger detection ── */
-    /* Finger present if EITHER:
-       (a) raw is significantly higher than calibration baseline (>20% brighter)
-       (b) red:green ratio > 1.4 (blood tissue optical signature)
-       Both are device-independent relative measures. */
-    const brighterThanBase = raw > _calMean * 1.20;
-    const redDominant      = rg > 1.4;
-    const fingerDetected   = brighterThanBase || redDominant;
+    /* Three independent signals — ANY ONE is enough to detect finger:
+       (a) Brightness: finger+torch makes red channel brighter (>10% above baseline)
+       (b) R/G ratio: blood tissue absorbs green, >1.3 indicates tissue
+       (c) Absolute: raw > 80 catches devices where baseline is very low
+           (dark room / no torch) but finger still raises signal noticeably
+    */
+    const brighterThanBase = raw > _calMean * 1.10;   /* 10% brighter than baseline */
+    const redDominant      = rg > 1.3;                 /* tissue optical signature */
+    const absoluteFloor    = raw > 80;                 /* catches dim-camera devices */
+    const fingerDetected   = brighterThanBase || redDominant || absoluteFloor;
 
     if (fingerDetected) {
       _fingerFrames++;
@@ -3837,6 +3853,24 @@ function _beginPPG(vid) {
     /* Require FINGER_CONFIRM consecutive frames to flip state — prevents flicker */
     if (_fingerFrames >= FINGER_CONFIRM)   S.fingerPresent = true;
     if (_noFingerFrames >= FINGER_CONFIRM) S.fingerPresent = false;
+
+    /* ── Debug output every 6 frames ── */
+    if (fi % 6 === 0) {
+      const _r = raw.toFixed(1), _g = rawG.toFixed(1), _rg = rg.toFixed(2);
+      const _base = _calDone ? _calMean.toFixed(1) : 'calibrating';
+      const _thresh = _calDone ? (_calMean*1.20).toFixed(1) : '--';
+      const _fp = S.fingerPresent ? '✅ YES' : '❌ NO';
+      const d=e=>{ const el=$id(e); return el?el:null; };
+      if(d('dbgR'))    d('dbgR').textContent    = _r;
+      if(d('dbgG'))    d('dbgG').textContent    = _g;
+      if(d('dbgRG'))   d('dbgRG').textContent   = _rg;
+      if(d('dbgBase')) d('dbgBase').textContent = _calDone?`${_base} (need >${_thresh})`:'calibrating…';
+      if(d('dbgFinger'))d('dbgFinger').textContent = _fp + (brighterThanBase?' (bright)':'') + (redDominant?' (R/G)':'');
+      if(d('dbgFi'))   d('dbgFi').textContent   = fi;
+      if(d('dbgAmp'))  d('dbgAmp').textContent  = (typeof amp!=='undefined'?amp.toFixed(2):'--');
+      if(d('dbgQ'))    d('dbgQ').textContent    = (typeof q!=='undefined'?q:'--');
+      if(d('dbgPeaks'))d('dbgPeaks').textContent= S.peakTs.length;
+    }
 
     if (!S.fingerPresent) {
       sq.length = 0;
